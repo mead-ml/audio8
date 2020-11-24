@@ -24,7 +24,7 @@ logger = logging.getLogger(__file__)
 
 
 class CTCLoss(nn.Module):
-    def __init__(self, zero_infinity=False):
+    def __init__(self, zero_infinity=True):
         super().__init__()
         self.zero_infinity = zero_infinity
 
@@ -77,8 +77,6 @@ def train():
     parser.add_argument("--valid_dataset", type=str, help='Dataset (by name), e.g. dev-other')
     parser.add_argument("--dataset_key", default="LibriSpeech",
                         help="dataset key for basedir")
-    parser.add_argument("--num_vq_vars", type=int, default=320)
-    parser.add_argument("--num_vq_groups", type=int, default=2)
     parser.add_argument("--grad_accum", type=int, default=1)
     parser.add_argument("--sr", type=int, choices=[8, 16], default=16)
     parser.add_argument("--d_model", type=int, default=768, help="Model dimension (and embedding dsz)")
@@ -95,15 +93,14 @@ def train():
     parser.add_argument("--lr_decay_rate", type=float, help="decay rate of lr scheduler")
     parser.add_argument("--lr_alpha", type=float, default=0., help="parameter alpha for cosine decay scheduler")
     parser.add_argument("--optim", default="adamw", type=str, help="Optimizer to use (defaults to adamw)")
-    parser.add_argument("--lr", type=float, default=2.0e-4, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=3.0e-5, help="Learning rate")
     parser.add_argument("--clip", type=float, default=1.0, help="Clipping gradient norm")
     parser.add_argument("--weight_decay", type=float, default=1.0e-2, help="Weight decay")
-    parser.add_argument("--train_steps", type=int, default=400_000, help="Num training steps")
-    parser.add_argument("--valid_steps", type=int, default=10_000, help="Num valid steps to evaluate each time")
-
+    parser.add_argument("--restart_tt", type=str, help="Optional param for legacy checkpoints", choices=['step', 'epoch', 'ignore'])
     parser.add_argument("--restart_from", type=str, help="Option allows you to restart from a previous checkpoint")
     parser.add_argument("--warmup_steps", type=int, default=10000, help="Num warmup steps")
-    parser.add_argument("--steps_per_checkpoint", type=int, default=1000, help="The number of steps per checkpoint")
+    parser.add_argument("--epochs", type=int, default=32, help="Num training epochs")
+    parser.add_argument("--saves_per_epoch", type=int, default=10, help="The number of saves per epoch")
     parser.add_argument("--preprocessed", type=str2bool, default=True, help="Has the data already been preprocessed?")
     parser.add_argument("--model_type", default="wav2vec2")
     parser.add_argument("--device", type=str,
@@ -115,8 +112,6 @@ def train():
                         help="Are we doing distributed training?")
     parser.add_argument("--vocab_file", help="Vocab for output decoding")
     parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--valid_batch_size", type=int)
-
     parser.add_argument("--local_rank",
                         type=int,
                         default=-1,
@@ -141,7 +136,7 @@ def train():
     train_set = LibriSpeechDataset(vocab, args.root_dir, url=args.train_dataset, folder_in_archive=args.dataset_key)
     valid_set = LibriSpeechDataset(vocab, args.root_dir, url=args.valid_dataset, folder_in_archive=args.dataset_key)
     train_loader = DataLoader(train_set, batch_size=args.batch_size, num_workers=args.num_train_workers, collate_fn=collate_fn)
-    valid_loader = DataLoader(valid_set, batch_size=args.valid_batch_size, collate_fn=collate_fn)
+    valid_loader = DataLoader(valid_set, batch_size=args.batch_size, collate_fn=collate_fn)
     logger.info("Loaded datasets")
 
     num_labels = len(vocab)
@@ -153,25 +148,42 @@ def train():
 
     # according to pytorch, len(train_loader) will return len(train_set) when train_set is IterableDataset, so manually
     # correct it here
-    valid_steps = args.valid_steps
-    update_on = args.steps_per_checkpoint
-    validate_on = update_on * 10
+
+    steps_per_epoch = len(train_loader) // (args.batch_size * args.grad_accum * num_gpus)
+    valid_steps = len(valid_loader) // args.batch_size
+    update_on = steps_per_epoch // args.saves_per_epoch
     report_on = max(10, update_on) // 10
-    lr_decay = CosineDecaySchedulerPyTorch(decay_steps=args.train_steps, alpha=args.lr_alpha, lr=args.lr)
+
+    lr_decay = CosineDecaySchedulerPyTorch(decay_steps=steps_per_epoch * args.epochs, alpha=args.lr_alpha, lr=args.lr)
     linear_warmup = WarmupLinearSchedulerPyTorch(args.warmup_steps, lr=args.lr)
     lr_sched = CompositeLRScheduler(linear_warmup, lr_decay, lr=args.lr)
 
     global_step = 0
+    start_epoch = 0
     if args.restart_from:
 
         if args.restart_from.endswith('.pt'):
             print(load_fairseq_bin(model.encoder, args.restart_from))
         else:
-            model.load_state_dict(torch.load(args.restart_from))
             vec = args.restart_from.split("-")
-            global_step = int(vec[-1].split(".")[0])
-            logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
-                    args.restart_from, global_step)
+            model.load_state_dict(torch.load(args.restart_from))
+            if args.restart_tt:
+                tick_type = args.restart_tt
+            else:
+                tick_type = vec[-2]
+            step_num = int(vec[-1].split(".")[0])
+            if tick_type == 'epoch':
+                start_epoch = step_num
+                global_step = start_epoch * steps_per_epoch
+
+            elif tick_type == 'step':
+                start_epoch = step_num // steps_per_epoch
+                global_step = step_num
+            else:
+                logger.warning(f"The previous tick was {step_num} but command-line specifies to ignore, setting to 0")
+
+            logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d, epoch=%d",
+                        args.restart_from, global_step, start_epoch + 1)
 
     optimizer = OptimizerManager(model, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay)
     logger.info("Model has {:,} parameters".format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
@@ -189,40 +201,39 @@ def train():
     model_base = os.path.join(args.basedir, 'checkpoint')
     steps = global_step
 
-    train_itr = iter(train_loader)
-    start_of_run = 0
-    avg_loss = Average('average_train_loss')
-    step_time = Average('average_step_time')
-    for i in range(steps, args.train_steps):
 
+    for epoch in range(start_epoch, args.epochs):
+
+        avg_loss = Average('average_train_loss')
+        step_time = Average('average_step_time')
         metrics = {}
         optimizer.zero_grad()
         start = time.time()
         model.train()
-        # This loader will iterate for ever
-        batch = next(train_itr)
-        loss = run_step(model, batch, loss_function, args.device)
+        train_itr = iter(train_loader)
+        for i in range(steps_per_epoch):
+            batch = next(train_itr)
+            loss = run_step(model, batch, loss_function, args.device)
+            steps += 1
+            loss.backward()
+            avg_loss.update(loss.item())
+            if steps % args.grad_accum == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+                optimizer.step()
+                optimizer.zero_grad()
+            elapsed = time.time() - start
+            step_time.update(elapsed)
 
-        steps += 1
-        loss.backward()
-        avg_loss.update(loss.item())
+            if (steps + 1) % report_on == 0:
+                steps_per_sec = 1.0 / step_time.avg
+                logging.info('%s, steps/min %f, LR %.6f', avg_loss, steps_per_sec*60, optimizer.current_lr)
 
-        if steps % args.grad_accum == 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-            optimizer.step()
-            optimizer.zero_grad()
-        elapsed = time.time() - start
-        step_time.update(elapsed)
+            if (steps + 1) % update_on == 0 and args.local_rank < 1:
+                save_checkpoint(model, model_base, steps, tick_type='step')
 
-        if (steps + 1) % report_on == 0:
-            steps_per_sec = 1.0 / step_time.avg
-            logging.info('%s, steps/min %f, LR %.6f', avg_loss, steps_per_sec*60, optimizer.current_lr)
-
-        if (steps + 1) % update_on == 0 and args.local_rank < 1:
-            save_checkpoint(model, model_base, steps, tick_type='step')
-        if (steps + 1) % validate_on == 0 and args.local_rank < 1:
+        if args.local_rank < 1:
             # How much time elapsed in minutes
-            elapsed = (time.time() - start_of_run) / 60
+            elapsed = (time.time() - start) / 60
             metrics['train_elapsed_min'] = elapsed
 
             train_token_loss = avg_loss.avg
@@ -236,7 +247,7 @@ def train():
                 batch = next(valid_itr)
 
                 with torch.no_grad():
-                    run_step(model, batch, loss_function, args.device)
+                    loss = run_step(model, batch, loss_function, args.device)
                     avg_valid_loss.update(loss.item())
             valid_token_loss = avg_valid_loss.avg
             metrics['average_valid_loss'] = valid_token_loss

@@ -463,6 +463,8 @@ class Wav2Vec2Encoder(nn.Module):
                 pad_mask = pad_mask[:, :-extra]
             pad_mask = pad_mask.view(pad_mask.size(0), features.size(1), -1)
             pad_mask = pad_mask.all(-1)
+            if not pad_mask.sum(-1).byte().all():
+                print("Expected all lengths to be non-zero")
 
         B, T, _ = features.shape
         features = self.proj_to_input(features)
