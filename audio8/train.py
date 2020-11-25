@@ -15,7 +15,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, Offsets, revlut
 from eight_mile.optz import *
-from eight_mile.pytorch.layers import save_checkpoint, init_distributed, sequence_mask
+from eight_mile.pytorch.layers import save_checkpoint, init_distributed, sequence_mask, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
 import torch.nn.functional as F
 
@@ -58,7 +58,7 @@ def read_vocab_file(vocab_file: str):
         return {v: i for i, v in enumerate(vocab)}
 
 
-def run_step(model, batch, loss_function, device):
+def run_step(model, batch, loss_function, device, return_logits=False):
     inputs, input_lengths, targets, target_lengths = batch
     inputs = inputs.to(device)
     pad_mask = sequence_mask(input_lengths).to(device)
@@ -66,7 +66,12 @@ def run_step(model, batch, loss_function, device):
     logits, pad_mask = model(inputs, pad_mask)
     input_lengths = pad_mask.sum(-1)
     loss = loss_function(logits.transpose(1, 0), input_lengths, targets, target_lengths)
-    return loss
+    if not return_logits:
+        return loss
+
+    logits = logits.detach().cpu()
+    input_lengths = input_lengths.detach().cpu()
+    return loss, logits, input_lengths
 
 
 def train():
@@ -132,7 +137,7 @@ def train():
         args.local_rank = updated_local_rank
     vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, args.dataset_key, 'dict.ltr.txt')
     vocab = read_vocab_file(vocab_file)
-
+    index2vocab = revlut(vocab)
     train_set = LibriSpeechDataset(vocab, args.root_dir, url=args.train_dataset, folder_in_archive=args.dataset_key)
     valid_set = LibriSpeechDataset(vocab, args.root_dir, url=args.valid_dataset, folder_in_archive=args.dataset_key)
     train_loader = DataLoader(train_set, batch_size=args.batch_size, num_workers=args.num_train_workers, collate_fn=collate_fn)
@@ -165,6 +170,8 @@ def train():
         if args.restart_from.endswith('.pt'):
             print(load_fairseq_bin(model.encoder, args.restart_from))
         else:
+            if os.path.isdir(args.restart_from):
+                args.restart_from, _ = find_latest_checkpoint(args.restart_from)
             vec = args.restart_from.split("-")
             model.load_state_dict(torch.load(args.restart_from))
             if args.restart_tt:
@@ -247,7 +254,12 @@ def train():
                 batch = next(valid_itr)
 
                 with torch.no_grad():
-                    loss = run_step(model, batch, loss_function, args.device)
+                    loss, logits, input_lengths = run_step(model, batch, loss_function, args.device, True)
+                    if j % 10 == 0:
+                        logits = torch.argmax(logits[0], -1)
+                        input_lengths = input_lengths[0].item()
+                        print([index2vocab[k] for k in logits[:input_lengths]])
+
                     avg_valid_loss.update(loss.item())
             valid_token_loss = avg_valid_loss.avg
             metrics['average_valid_loss'] = valid_token_loss
