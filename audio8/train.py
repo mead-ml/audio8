@@ -9,7 +9,7 @@ import os
 from argparse import ArgumentParser
 import torch.nn as nn
 import random
-from audio8.data import LibriSpeechDataset, collate_fn
+from audio8.data import AudioTextJSONDataset
 from audio8.wav2vec2 import create_acoustic_model, load_fairseq_bin
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
@@ -80,6 +80,7 @@ def train():
     parser.add_argument("--root_dir")
     parser.add_argument("--train_dataset", type=str, help='Dataset (by name), e.g. train-clean-360')
     parser.add_argument("--valid_dataset", type=str, help='Dataset (by name), e.g. dev-other')
+    parser.add_argument("--dict_file", type=str, help="Dictionary file")
     parser.add_argument("--dataset_key", default="LibriSpeech",
                         help="dataset key for basedir")
     parser.add_argument("--grad_accum", type=int, default=1)
@@ -90,7 +91,6 @@ def train():
     parser.add_argument("--num_heads", type=int, default=12, help="Number of heads")
     parser.add_argument("--num_layers", type=int, default=12, help="Number of layers")
     parser.add_argument("--num_train_workers", type=int, default=4, help="Number train workers")
-    parser.add_argument("--tokens_per_batch", type=int, default=1_400_000, help="Number of tokens per batch")
     parser.add_argument("--max_sample_len", type=int, default=250_000, help="Max sample length")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
     parser.add_argument("--lr_scheduler", type=str, default='cosine', help="The type of learning rate decay scheduler")
@@ -108,6 +108,15 @@ def train():
     parser.add_argument("--saves_per_epoch", type=int, default=10, help="The number of saves per epoch")
     parser.add_argument("--preprocessed", type=str2bool, default=True, help="Has the data already been preprocessed?")
     parser.add_argument("--model_type", default="wav2vec2")
+
+    parser.add_argument("--train_steps", type=int, default=400_000, help="Num training steps")
+    parser.add_argument("--valid_steps", type=int, default=1000, help="Num valid steps to evaluate each time")
+    parser.add_argument("--buckets", type=int, nargs="+",
+                        help="Bucket sizes if bucketing",
+                        default=[11111, 35714, 38461, 41666, 45454, 50000, 55555, 62500, 71428, 83333, 100000, 125000, 166666,
+                                 250000, 275000, 300000, 325000, 350000, 400000, 425000])
+    parser.add_argument("--steps_per_checkpoint", type=int, default=1000, help="The number of steps per checkpoint")
+
     parser.add_argument("--device", type=str,
                         default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")
@@ -116,7 +125,7 @@ def train():
                         default=False,
                         help="Are we doing distributed training?")
     parser.add_argument("--vocab_file", help="Vocab for output decoding")
-    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
     parser.add_argument("--local_rank",
                         type=int,
                         default=-1,
@@ -135,13 +144,15 @@ def train():
     if args.distributed:
         args.device, updated_local_rank = init_distributed(args.local_rank)
         args.local_rank = updated_local_rank
-    vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, args.dataset_key, 'dict.ltr.txt')
+    vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, 'dict.txt')
     vocab = read_vocab_file(vocab_file)
     index2vocab = revlut(vocab)
-    train_set = LibriSpeechDataset(vocab, args.root_dir, url=args.train_dataset, folder_in_archive=args.dataset_key)
-    valid_set = LibriSpeechDataset(vocab, args.root_dir, url=args.valid_dataset, folder_in_archive=args.dataset_key)
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, num_workers=args.num_train_workers, collate_fn=collate_fn)
-    valid_loader = DataLoader(valid_set, batch_size=args.batch_size, collate_fn=collate_fn)
+    train_dataset = os.path.join(args.root_dir, args.train_dataset)
+    valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
+    train_set = AudioTextJSONDataset(args.buckets, train_dataset, vocab, args.target_tokens_per_batch, distribute=True, shuffle=True)
+    valid_set = AudioTextJSONDataset(args.buckets, valid_dataset, vocab, args.target_tokens_per_batch)
+    train_loader = DataLoader(train_set, batch_size=None)  #, num_workers=args.num_train_workers)
+    valid_loader = DataLoader(valid_set, batch_size=None)
     logger.info("Loaded datasets")
 
     num_labels = len(vocab)
@@ -154,14 +165,17 @@ def train():
     # according to pytorch, len(train_loader) will return len(train_set) when train_set is IterableDataset, so manually
     # correct it here
 
-    steps_per_epoch = len(train_loader) // (args.batch_size * args.grad_accum * num_gpus)
-    valid_steps = len(valid_loader) // args.batch_size
-    update_on = steps_per_epoch // args.saves_per_epoch
+    #steps_per_epoch = len(train_loader) // (args.batch_size * args.grad_accum * num_gpus)
+    # according to pytorch, len(train_loader) will return len(train_set) when train_set is IterableDataset, so manually
+    # correct it here
+    valid_steps = args.valid_steps
+    update_on = args.steps_per_checkpoint
+    validate_on = update_on * 10
     report_on = max(10, update_on) // 10
-
-    lr_decay = CosineDecaySchedulerPyTorch(decay_steps=steps_per_epoch * args.epochs, alpha=args.lr_alpha, lr=args.lr)
+    lr_decay = CosineDecaySchedulerPyTorch(decay_steps=args.train_steps, alpha=args.lr_alpha, lr=args.lr)
     linear_warmup = WarmupLinearSchedulerPyTorch(args.warmup_steps, lr=args.lr)
     lr_sched = CompositeLRScheduler(linear_warmup, lr_decay, lr=args.lr)
+
 
     global_step = 0
     start_epoch = 0
@@ -179,12 +193,7 @@ def train():
             else:
                 tick_type = vec[-2]
             step_num = int(vec[-1].split(".")[0])
-            if tick_type == 'epoch':
-                start_epoch = step_num
-                global_step = start_epoch * steps_per_epoch
-
-            elif tick_type == 'step':
-                start_epoch = step_num // steps_per_epoch
+            if tick_type == 'step':
                 global_step = step_num
             else:
                 logger.warning(f"The previous tick was {step_num} but command-line specifies to ignore, setting to 0")
@@ -208,39 +217,43 @@ def train():
     model_base = os.path.join(args.basedir, 'checkpoint')
     steps = global_step
 
+    train_itr = iter(train_loader)
+    start_of_run = 0
+    avg_loss = Average('average_train_loss')
+    step_time = Average('average_step_time')
 
-    for epoch in range(start_epoch, args.epochs):
+    for i in range(steps, args.train_steps):
 
-        avg_loss = Average('average_train_loss')
-        step_time = Average('average_step_time')
         metrics = {}
         optimizer.zero_grad()
         start = time.time()
         model.train()
-        train_itr = iter(train_loader)
-        for i in range(steps_per_epoch):
-            batch = next(train_itr)
-            loss = run_step(model, batch, loss_function, args.device)
-            steps += 1
-            loss.backward()
-            avg_loss.update(loss.item())
-            if steps % args.grad_accum == 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-                optimizer.step()
-                optimizer.zero_grad()
-            elapsed = time.time() - start
-            step_time.update(elapsed)
+        # This loader will iterate for ever
+        batch = next(train_itr)
+        loss, logits, input_lengths = run_step(model, batch, loss_function, args.device, True)
+        #logits = torch.argmax(logits[0], -1)
+        #input_lengths = input_lengths[0].item()
+        #print([index2vocab[k.item()] for k in logits[:input_lengths]])
+        steps += 1
+        print(steps, loss.item())
+        loss.backward()
+        avg_loss.update(loss.item())
+        if steps % args.grad_accum == 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+            optimizer.step()
+            optimizer.zero_grad()
+        elapsed = time.time() - start
+        step_time.update(elapsed)
 
-            if (steps + 1) % report_on == 0:
-                steps_per_sec = 1.0 / step_time.avg
-                logging.info('%s, steps/min %f, LR %.6f', avg_loss, steps_per_sec*60, optimizer.current_lr)
+        if (steps + 1) % report_on == 0:
+            steps_per_sec = 1.0 / step_time.avg
+            logging.info('%s, steps/min %f, LR %.6f', avg_loss, steps_per_sec*60, optimizer.current_lr)
 
-            if (steps + 1) % update_on == 0 and args.local_rank < 1:
-                save_checkpoint(model, model_base, steps, tick_type='step')
-
-        if args.local_rank < 1:
+        if (steps + 1) % update_on == 0 and args.local_rank < 1:
+            save_checkpoint(model, model_base, steps, tick_type='step')
+        if (steps + 1) % validate_on == 0 and args.local_rank < 1:
             # How much time elapsed in minutes
-            elapsed = (time.time() - start) / 60
+            elapsed = (time.time() - start_of_run) / 60
             metrics['train_elapsed_min'] = elapsed
 
             train_token_loss = avg_loss.avg
@@ -252,20 +265,21 @@ def train():
             valid_itr = iter(valid_loader)
             for j in range(valid_steps):
                 batch = next(valid_itr)
-
                 with torch.no_grad():
                     loss, logits, input_lengths = run_step(model, batch, loss_function, args.device, True)
                     if j % 10 == 0:
                         logits = torch.argmax(logits[0], -1)
                         input_lengths = input_lengths[0].item()
                         print([index2vocab[k] for k in logits[:input_lengths]])
-
                     avg_valid_loss.update(loss.item())
+
             valid_token_loss = avg_valid_loss.avg
             metrics['average_valid_loss'] = valid_token_loss
             elapsed = (time.time() - valid_start) / 60
             metrics['valid_elapsed_epoch'] = elapsed
             logger.info(metrics)
+            model.train()
+
 
 
 if __name__ == "__main__":

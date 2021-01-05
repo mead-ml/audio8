@@ -6,6 +6,7 @@ from torchaudio.datasets import LIBRISPEECH
 from torchaudio.datasets.utils import walk_files
 from typing import Tuple, Dict
 import logging
+import json
 import time
 import numpy as np
 import os
@@ -87,6 +88,135 @@ def collate_fn(batch_list):
         tgt[i, :l] = batch_list[i]['tgt']
     return torch.from_numpy(src), src_length, torch.from_numpy(tgt), tgt_length
 
+def find_next_fit(v, fits):
+    sz = 0
+    for fit in fits:
+        if v < fit:
+            sz = fit
+
+    return sz
+
+
+class AudioTextJSONDataset(IterableDataset):
+
+    def __init__(self, buckets, json_file, vocab, target_tokens_per_batch, distribute=True, shuffle=True, max_dst_length=120):
+        super().__init__()
+        self.bucket_lengths = buckets
+        self.max_dst_length = max_dst_length
+        self.w2i = vocab # {}
+        #with open(dict_file) as rf:
+        #    for line in rf:
+        #        token, index = line.split()
+        #        self.w2i[token] = index
+        self.json_file = json_file
+        self.rank = 0
+        self.world_size = 1
+        self.files = []
+        self.target_tokens_per_batch = target_tokens_per_batch
+        self.shuffle = shuffle
+        self.distribute = distribute
+        if torch.distributed.is_initialized() and distribute:
+            self.rank = torch.distributed.get_rank()
+            self.world_size = torch.distributed.get_world_size()
+
+        self._read_json_file(json_file)
+
+    def _read_json_file(self, json_file):
+        asc = sorted(self.bucket_lengths)
+        self.files = {b: [] for b in asc}
+        skipped = 0
+        with open(json_file, "r") as f:
+            self.directory = f.readline().strip()
+            for line in f:
+                j = json.loads(line)
+                path = j['audio']
+                x_length = j['x_length']
+                count = find_next_fit(x_length, self.bucket_lengths)
+                y_length = j['y_length']
+                tokens = np.array([self.w2i[t] for t in j['tokens']])
+                if count == 0:
+                    print(x_length)
+                    continue
+                self.files[count].append((path, x_length, y_length, tokens))
+
+
+    def _get_worker_info(self):
+        return torch.utils.data.get_worker_info() if self.distribute else None
+
+    def _init_read_order(self):
+        # Each node has the same worker_info, so the unique offsets for each is
+        # rank * num_workers + worker_id
+        # and the total available workers is world_size * num_workers
+        worker_info = self._get_worker_info()
+
+        if worker_info is None:
+            num_workers_per_node = 1
+            node_worker_id = 0
+        else:
+            num_workers_per_node = worker_info.num_workers
+            node_worker_id = worker_info.id
+        all_workers = (self.world_size * num_workers_per_node)
+        offset = self.rank * num_workers_per_node + node_worker_id
+        read_file_order = list(range(offset, len(self.files), all_workers))
+        if not read_file_order:
+            if offset > 0:
+                # This is probably wrong
+                logger.warning(f"There are no files to read for worker {node_worker_id}, offset {offset}!" +
+                               " This might mean that you are passing an incorrect training or validation directory")
+            else:
+                # This is definitely wrong
+                raise Exception(f"No files of pattern {self.pattern} were found in {self.directory}!")
+        return read_file_order, node_worker_id
+
+    def __iter__(self):
+        read_file_order, _ = self._init_read_order()
+        keys = list(self.files.keys())
+        # If we have multiple files per worker, possibly shuffle the file read order
+        while True:
+            if self.shuffle:
+                random.shuffle(read_file_order)
+            for bucket_idx in read_file_order:
+                bucket = keys[bucket_idx]
+                num_samples = self.target_tokens_per_batch // bucket
+                audio_samples = []
+                audio_lengths = []
+                text_samples = []
+                text_lengths = []
+                for (file, x_length, y_length, tokens) in self.files[bucket]:
+
+                    #text = np.array([self.w2i[t] for t in tokens])
+                    zp_text = np.zeros(self.max_dst_length, dtype=np.int32)
+                    zp_text[:len(tokens)] = tokens
+                    text_lengths.append(len(tokens))
+                    zp_audio = np.zeros(bucket, dtype=np.float32)
+                    audio = self.process_sample(file)
+                    zp_audio[:len(audio)] = audio
+                    audio_lengths.append(len(audio))
+                    audio_samples.append(zp_audio)
+                    text_samples.append(zp_text)
+                    if len(audio_samples) == num_samples:
+                        pair = np.stack(audio_samples), np.stack(audio_lengths), np.stack(text_samples), np.stack(text_lengths)
+                        audio_samples = []
+                        audio_lengths = []
+                        text_samples = []
+                        text_lengths = []
+                        yield pair
+                if audio_samples:
+                    pair = np.stack(audio_samples), np.stack(audio_lengths), np.stack(text_samples), np.stack(text_lengths)
+                    yield pair
+
+    def process_sample(self, file):
+        """Read in a line and turn it into an entry.  FIXME, get from anywhere
+
+        The entries will get collated by the data loader
+
+        :param file:
+        :return:
+        """
+        wav, _ = sf.read(file)
+        wav = wav.astype(np.float32)
+        return wav
+
 
 class AudioFileDataset(IterableDataset):
 
@@ -158,6 +288,7 @@ class AudioFileDataset(IterableDataset):
             for file_idx in read_file_order:
                 file, _ = self.files[file_idx]
                 yield self.process_sample(file, self.max_length)
+
 
     def process_sample(self, file, len):
         """Read in a line and turn it into an entry.  FIXME, get from anywhere
