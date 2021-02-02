@@ -1,6 +1,9 @@
 """Training using 8-mile API
 
 """
+from pynvml import *
+
+nvmlInit()
 import logging
 import time
 import numpy as np
@@ -9,7 +12,7 @@ import os
 from argparse import ArgumentParser
 import torch.nn as nn
 import random
-from audio8.data import AudioTextJSONDataset
+from audio8.data import AudioTextLetterDataset
 from audio8.wav2vec2 import create_acoustic_model, load_fairseq_bin
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
@@ -34,17 +37,17 @@ class CTCLoss(nn.Module):
         pad_mask = (targets != Offsets.PAD) & (targets != Offsets.EOS)
         targets_flat = targets.masked_select(pad_mask)
 
-        with torch.backends.cudnn.flags(enabled=False):
-            loss = F.ctc_loss(
-                log_prob,
-                targets_flat,
-                input_lengths,
-                target_lengths,
-                blank=Offsets.GO,
-                reduction="sum",
-                zero_infinity=self.zero_infinity,
-            )
-            return loss
+        #with torch.backends.cudnn.flags(enabled=False):
+        loss = F.ctc_loss(
+            log_prob,
+            targets_flat,
+            input_lengths,
+            target_lengths,
+            blank=Offsets.GO,
+            reduction="sum",
+            zero_infinity=self.zero_infinity,
+        )
+        return loss
 
 
 def read_vocab_file(vocab_file: str):
@@ -60,6 +63,7 @@ def read_vocab_file(vocab_file: str):
 
 def run_step(model, batch, loss_function, device, return_logits=False):
     inputs, input_lengths, targets, target_lengths = batch
+    #print(torch.max(input_lengths).item(), torch.min(input_lengths).item())
     inputs = inputs.to(device)
     pad_mask = sequence_mask(input_lengths).to(device)
     targets = targets.to(device)
@@ -98,7 +102,7 @@ def train():
     parser.add_argument("--lr_decay_rate", type=float, help="decay rate of lr scheduler")
     parser.add_argument("--lr_alpha", type=float, default=0., help="parameter alpha for cosine decay scheduler")
     parser.add_argument("--optim", default="adamw", type=str, help="Optimizer to use (defaults to adamw)")
-    parser.add_argument("--lr", type=float, default=3.0e-5, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=4.0e-4, help="Learning rate")
     parser.add_argument("--clip", type=float, default=1.0, help="Clipping gradient norm")
     parser.add_argument("--weight_decay", type=float, default=1.0e-2, help="Weight decay")
     parser.add_argument("--restart_tt", type=str, help="Optional param for legacy checkpoints", choices=['step', 'epoch', 'ignore'])
@@ -108,13 +112,13 @@ def train():
     parser.add_argument("--saves_per_epoch", type=int, default=10, help="The number of saves per epoch")
     parser.add_argument("--preprocessed", type=str2bool, default=True, help="Has the data already been preprocessed?")
     parser.add_argument("--model_type", default="wav2vec2")
-
+    parser.add_argument("--unfreeze_enc_after_step", default=10_000)
     parser.add_argument("--train_steps", type=int, default=400_000, help="Num training steps")
     parser.add_argument("--valid_steps", type=int, default=1000, help="Num valid steps to evaluate each time")
     parser.add_argument("--buckets", type=int, nargs="+",
                         help="Bucket sizes if bucketing",
                         default=[11111, 35714, 38461, 41666, 45454, 50000, 55555, 62500, 71428, 83333, 100000, 125000, 166666,
-                                 250000, 275000, 300000, 325000, 350000, 400000, 425000])
+                                 250000, 275000, 300000, 325000])#, 350000, 400000, 425000])
     parser.add_argument("--steps_per_checkpoint", type=int, default=1000, help="The number of steps per checkpoint")
 
     parser.add_argument("--device", type=str,
@@ -149,10 +153,13 @@ def train():
     index2vocab = revlut(vocab)
     train_dataset = os.path.join(args.root_dir, args.train_dataset)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
-    train_set = AudioTextJSONDataset(args.buckets, train_dataset, vocab, args.target_tokens_per_batch, distribute=True, shuffle=True)
-    valid_set = AudioTextJSONDataset(args.buckets, valid_dataset, vocab, args.target_tokens_per_batch)
-    train_loader = DataLoader(train_set, batch_size=None)  #, num_workers=args.num_train_workers)
+    DatasetType = AudioTextLetterDataset
+    train_set = DatasetType(args.buckets, train_dataset, vocab, args.target_tokens_per_batch, distribute=True,
+                            shuffle=True)
+    valid_set = DatasetType(args.buckets, valid_dataset, vocab, args.target_tokens_per_batch)
+    train_loader = DataLoader(train_set, batch_size=None)  # , num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
+
     logger.info("Loaded datasets")
 
     num_labels = len(vocab)
@@ -212,8 +219,10 @@ def train():
         # based on rank, here we select only a single gpu and use it for input and
         # output.
         model = DistributedDataParallel(model, device_ids=[args.device], output_device=args.device)
+        _model = model.module
         logger.info("Model located on %s", args.device)
-
+    else:
+        _model = model
     model_base = os.path.join(args.basedir, 'checkpoint')
     steps = global_step
 
@@ -224,61 +233,73 @@ def train():
 
     for i in range(steps, args.train_steps):
 
+        if steps > args.freeze_enc_after_step and _model.freeze:
+            _model.freeze = False
         metrics = {}
         optimizer.zero_grad()
         start = time.time()
         model.train()
         # This loader will iterate for ever
         batch = next(train_itr)
+
         loss, logits, input_lengths = run_step(model, batch, loss_function, args.device, True)
-        #logits = torch.argmax(logits[0], -1)
-        #input_lengths = input_lengths[0].item()
-        #print([index2vocab[k.item()] for k in logits[:input_lengths]])
+        logits = torch.argmax(logits[0], -1)
+        input_lengths = input_lengths[0].item()
+        #print([index2vocab[k.item()] for k in logits[:input_lengths] if k.item() not in [0, 1]])
         steps += 1
-        print(steps, loss.item())
-        loss.backward()
-        avg_loss.update(loss.item())
-        if steps % args.grad_accum == 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-            optimizer.step()
-            optimizer.zero_grad()
-        elapsed = time.time() - start
-        step_time.update(elapsed)
 
-        if (steps + 1) % report_on == 0:
-            steps_per_sec = 1.0 / step_time.avg
-            logging.info('%s, steps/min %f, LR %.6f', avg_loss, steps_per_sec*60, optimizer.current_lr)
+        #print(steps, loss.item())
+        try:
+            avg_loss.update(loss.item())
+            loss.backward()
+            if steps % args.grad_accum == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+                optimizer.step()
+                optimizer.zero_grad()
+            elapsed = time.time() - start
+            step_time.update(elapsed)
 
-        if (steps + 1) % update_on == 0 and args.local_rank < 1:
-            save_checkpoint(model, model_base, steps, tick_type='step')
-        if (steps + 1) % validate_on == 0 and args.local_rank < 1:
-            # How much time elapsed in minutes
-            elapsed = (time.time() - start_of_run) / 60
-            metrics['train_elapsed_min'] = elapsed
+            if (steps + 1) % report_on == 0:
+                steps_per_sec = 1.0 / step_time.avg
+                logging.info('%s, steps/min %f, LR %.6f', avg_loss, steps_per_sec*60, optimizer.current_lr)
 
-            train_token_loss = avg_loss.avg
-            metrics['average_train_loss'] = train_token_loss
-            avg_valid_loss = Average('average_valid_loss')
+            if (steps + 1) % update_on == 0 and args.local_rank < 1:
+                save_checkpoint(model, model_base, steps, tick_type='step')
+            if (steps + 1) % validate_on == 0 and args.local_rank < 1:
+                # How much time elapsed in minutes
+                elapsed = (time.time() - start_of_run) / 60
+                metrics['train_elapsed_min'] = elapsed
 
-            model.eval()
-            valid_start = time.time()
-            valid_itr = iter(valid_loader)
-            for j in range(valid_steps):
-                batch = next(valid_itr)
-                with torch.no_grad():
-                    loss, logits, input_lengths = run_step(model, batch, loss_function, args.device, True)
-                    if j % 10 == 0:
-                        logits = torch.argmax(logits[0], -1)
-                        input_lengths = input_lengths[0].item()
-                        print([index2vocab[k] for k in logits[:input_lengths]])
-                    avg_valid_loss.update(loss.item())
+                train_token_loss = avg_loss.avg
+                metrics['average_train_loss'] = train_token_loss
+                avg_valid_loss = Average('average_valid_loss')
 
-            valid_token_loss = avg_valid_loss.avg
-            metrics['average_valid_loss'] = valid_token_loss
-            elapsed = (time.time() - valid_start) / 60
-            metrics['valid_elapsed_epoch'] = elapsed
-            logger.info(metrics)
-            model.train()
+                model.eval()
+                valid_start = time.time()
+                valid_itr = iter(valid_loader)
+                for j in range(valid_steps):
+                    batch = next(valid_itr)
+                    with torch.no_grad():
+                        loss, logits, input_lengths = run_step(model, batch, loss_function, args.device, True)
+                        if j % 10 == 0:
+                            logits = torch.argmax(logits[0], -1)
+                            input_lengths = input_lengths[0].item()
+                            print([index2vocab[k] for k in logits[:input_lengths]])
+                        avg_valid_loss.update(loss.item())
+
+                valid_token_loss = avg_valid_loss.avg
+                metrics['average_valid_loss'] = valid_token_loss
+                elapsed = (time.time() - valid_start) / 60
+                metrics['valid_elapsed_epoch'] = elapsed
+                logger.info(metrics)
+                model.train()
+        except Exception as e:
+            print(e)
+            h = nvmlDeviceGetHandleByIndex(0)
+            info = nvmlDeviceGetMemoryInfo(h)
+            print(f'total    : {info.total}')
+            print(f'free     : {info.free}')
+            print(f'used     : {info.used}')
 
 
 
