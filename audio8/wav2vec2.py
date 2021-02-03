@@ -552,7 +552,7 @@ class Wav2Vec2Encoder(nn.Module):
             time_mask = torch.from_numpy(time_mask).to(x.device)
             features[time_mask] = self.mask_emb
         x = self.encoder(features, pad_mask)
-        return x, torch.sum(pad_mask, 1)
+        return x, pad_mask.sum(-1)
 
 
 class Wav2Vec2AcousticModel(nn.Module):
@@ -561,15 +561,14 @@ class Wav2Vec2AcousticModel(nn.Module):
         super().__init__()
         self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff, dropout_input, dropout_features)
         self.proj = pytorch_linear(d_model, num_labels)
-        self.freeze = False
+        self.freeze = True
 
     def forward(self, x, pad_mask=None):
 
         with torch.no_grad() if self.freeze else contextlib.ExitStack():
             encoded, valid_lengths = self.encoder(x, pad_mask)
         encoded = self.proj(encoded)
-        return encoded, valid_lengths
-        #return F.log_softmax(encoded, dim=-1), valid_lengths
+        return F.log_softmax(encoded, dim=-1), valid_lengths
 
 
 class Wav2Vec2Model(nn.Module):

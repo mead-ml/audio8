@@ -24,7 +24,12 @@ import torch.nn.functional as F
 
 
 logger = logging.getLogger(__file__)
-
+Offsets.GO = 0
+Offsets.PAD = 1
+Offsets.VALUES[Offsets.GO] = '<s>'
+Offsets.VALUES[Offsets.PAD] = '<pad>'
+Offsets.VALUES[Offsets.EOS] = '</s>'
+Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 class CTCLoss(nn.Module):
     def __init__(self, zero_infinity=True):
@@ -61,21 +66,15 @@ def read_vocab_file(vocab_file: str):
         return {v: i for i, v in enumerate(vocab)}
 
 
-def run_step(model, batch, loss_function, device, return_logits=False):
+def run_step(model, batch, loss_function, device):
     inputs, input_lengths, targets, target_lengths = batch
-    #print(torch.max(input_lengths).item(), torch.min(input_lengths).item())
+    pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
-    pad_mask = sequence_mask(input_lengths).to(device)
     targets = targets.to(device)
-    logits, pad_mask = model(inputs, pad_mask)
-    input_lengths = pad_mask.sum(-1)
-    loss = loss_function(logits.transpose(1, 0), input_lengths, targets, target_lengths)
-    if not return_logits:
-        return loss
-
+    logits, valid_lengths = model(inputs, pad_mask)
+    loss = loss_function(logits.transpose(1, 0), valid_lengths, targets, target_lengths)
     logits = logits.detach().cpu()
-    input_lengths = input_lengths.detach().cpu()
-    return loss, logits, input_lengths
+    return loss, logits, pad_mask
 
 
 def train():
@@ -148,15 +147,15 @@ def train():
     if args.distributed:
         args.device, updated_local_rank = init_distributed(args.local_rank)
         args.local_rank = updated_local_rank
-    vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, 'dict.txt')
+
+    vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, 'dict.ltr.txt')
     vocab = read_vocab_file(vocab_file)
     index2vocab = revlut(vocab)
     train_dataset = os.path.join(args.root_dir, args.train_dataset)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
-    DatasetType = AudioTextLetterDataset
-    train_set = DatasetType(args.buckets, train_dataset, vocab, args.target_tokens_per_batch, distribute=True,
-                            shuffle=True)
-    valid_set = DatasetType(args.buckets, valid_dataset, vocab, args.target_tokens_per_batch)
+
+    train_set = AudioTextLetterDataset(train_dataset, vocab, args.target_tokens_per_batch, 325000, shuffle=True)
+    valid_set = AudioTextLetterDataset(valid_dataset, vocab, args.target_tokens_per_batch, 325000, distribute=False, shuffle=False)
     train_loader = DataLoader(train_set, batch_size=None)  # , num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
 
@@ -233,7 +232,7 @@ def train():
 
     for i in range(steps, args.train_steps):
 
-        if steps > args.freeze_enc_after_step and _model.freeze:
+        if steps > args.unfreeze_enc_after_step:
             _model.freeze = False
         metrics = {}
         optimizer.zero_grad()
@@ -242,13 +241,10 @@ def train():
         # This loader will iterate for ever
         batch = next(train_itr)
 
-        loss, logits, input_lengths = run_step(model, batch, loss_function, args.device, True)
-        logits = torch.argmax(logits[0], -1)
-        input_lengths = input_lengths[0].item()
-        #print([index2vocab[k.item()] for k in logits[:input_lengths] if k.item() not in [0, 1]])
+        loss, logits, input_lengths = run_step(model, batch, loss_function, args.device)
         steps += 1
 
-        #print(steps, loss.item())
+        print(steps, loss.item())
         try:
             avg_loss.update(loss.item())
             loss.backward()
