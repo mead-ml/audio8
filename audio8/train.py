@@ -244,7 +244,6 @@ def train():
         loss, logits, input_lengths = run_step(model, batch, loss_function, args.device)
         steps += 1
 
-        print(steps, loss.item())
         try:
             avg_loss.update(loss.item())
             loss.backward()
