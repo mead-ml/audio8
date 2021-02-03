@@ -1,27 +1,16 @@
 """Training using 8-mile API
 
 """
-from pynvml import *
 
-nvmlInit()
-import logging
-import time
-import numpy as np
-from typing import Tuple, List, Optional, Dict
 import os
 from argparse import ArgumentParser
-import torch.nn as nn
-import random
 from audio8.data import AudioTextLetterDataset
 from audio8.wav2vec2 import create_acoustic_model, load_fairseq_bin, W2V_CTC_MAP
-from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
-from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, Offsets, revlut
-from eight_mile.optz import *
-from eight_mile.pytorch.layers import save_checkpoint, init_distributed, sequence_mask, find_latest_checkpoint
+from eight_mile.utils import str2bool, Offsets, revlut
+from eight_mile.pytorch.layers import sequence_mask, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
-import torch.nn.functional as F
-
+from ctc import ctc_metrics
 
 logger = logging.getLogger(__file__)
 
@@ -32,60 +21,6 @@ Offsets.VALUES[Offsets.PAD] = '<pad>'
 Offsets.VALUES[Offsets.EOS] = '</s>'
 Offsets.VALUES[Offsets.UNK] = '<unk>'
 
-def postproc_letters(sentence):
-
-    sentence = sentence.replace(" ", "").replace("|", " ").strip()
-    return sentence
-
-
-def ctc_errors(lprobs_t, target, input_lengths, index2vocab):
-    logging_output = {}
-    import editdistance
-    BLANK_IDX = Offsets.GO
-    with torch.no_grad():
-        #lprobs_t = lprobs.transpose(0, 1).float().cpu()
-
-        c_err = 0
-        c_len = 0
-        w_errs = 0
-        w_len = 0
-        wv_errs = 0
-        for lp, t, inp_l in zip(
-                lprobs_t,
-                target,
-                input_lengths,
-        ):
-            lp = lp[:inp_l].unsqueeze(0)
-            p = (t != Offsets.PAD) & (
-                    t != Offsets.EOS
-            )
-            targ = t[p]
-            targ_units = [index2vocab[x.item()] for x in targ]
-            targ_units_arr = targ.tolist()
-
-            toks = lp.argmax(dim=-1).unique_consecutive()
-            pred_units_arr = toks[toks != BLANK_IDX].tolist()
-
-            c_err += editdistance.eval(pred_units_arr, targ_units_arr)
-            c_len += len(targ_units_arr)
-
-            targ_words = postproc_letters(''.join(targ_units)).split()
-
-            pred_units = [index2vocab[x] for x in pred_units_arr]
-            pred_words_raw = postproc_letters(''.join(pred_units)).split()
-
-            dist = editdistance.eval(pred_words_raw, targ_words)
-            w_errs += dist
-            wv_errs += dist
-
-            w_len += len(targ_words)
-
-        logging_output["wv_errors"] = wv_errs
-        logging_output["w_errors"] = w_errs
-        logging_output["w_total"] = w_len
-        logging_output["c_errors"] = c_err
-        logging_output["c_total"] = c_len
-    return logging_output
 
 def read_vocab_file(vocab_file: str):
     vocab = []
@@ -98,18 +33,20 @@ def read_vocab_file(vocab_file: str):
         return {v: i for i, v in enumerate(vocab)}
 
 
-def run_step(model, batch, device, index2vocab):
-    inputs, input_lengths, targets, target_lengths = batch
-    inputs = inputs.to(device)
-    pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device)
-    #targets = targets.to(device)
-    logits, output_lengths = model(inputs, pad_mask)
-    #input_lengths = pad_mask.sum(-1)
+def run_step(index2vocab, model, batch, device, verbose=False):
+    with torch.no_grad():
+        inputs, input_lengths, targets, target_lengths = batch
+        inputs = inputs.to(device)
+        pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device)
+        logits, output_lengths = model(inputs, pad_mask)
 
-    print(ctc_errors(logits, targets, input_lengths, index2vocab))
-    logits = logits.detach().cpu()
-    #input_lengths = input_lengths.detach().cpu()
-    return logits, output_lengths #input_lengths
+        if verbose:
+            logits = torch.argmax(logits[0], -1).tolist()
+            input_lengths = input_lengths[0].item()
+            print([index2vocab[k] for k in logits[:input_lengths] if k not in [0, 1, 2]])
+
+        metrics = ctc_metrics(logits, targets, input_lengths, index2vocab)
+    return metrics
 
 
 def evaluate():
@@ -139,16 +76,11 @@ def evaluate():
     parser.add_argument("--weight_decay", type=float, default=1.0e-2, help="Weight decay")
     parser.add_argument("--restart_tt", type=str, help="Optional param for legacy checkpoints", choices=['step', 'epoch', 'ignore'])
     parser.add_argument("--restart_from", type=str, help="Option allows you to restart from a previous checkpoint")
-    parser.add_argument("--preprocessed", type=str2bool, default=True, help="Has the data already been preprocessed?")
     parser.add_argument("--model_type", default="wav2vec2")
-
-    parser.add_argument("--valid_steps", type=int, default=1000, help="Num valid steps to evaluate each time")
-    parser.add_argument("--buckets", type=int, nargs="+",
-                        help="Bucket sizes if bucketing",
-                        default=[11111, 35714, 38461, 41666, 45454, 50000, 55555, 62500, 71428, 83333, 100000, 125000, 166666,
-                                 250000, 275000, 300000, 325000])#, 350000, 400000, 425000])
+    parser.add_argument("--verbose", type=str2bool, help="Verbose", default=False)
+    parser.add_argument("--valid_steps", type=int, help="Num valid steps to evaluate", default=40_000)
+    parser.add_argument("--steps_per_update", type=int, default=100)
     parser.add_argument("--steps_per_checkpoint", type=int, default=1000, help="The number of steps per checkpoint")
-
     parser.add_argument("--device", type=str,
                         default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")
@@ -183,21 +115,29 @@ def evaluate():
 
     model.eval()
     valid_itr = iter(valid_loader)
-    for i in range(args.valid_steps):
+    metrics = {}
+    c_errors = 0
+    c_total = 0
+    w_errors = 0
+    w_total = 0
 
+    for j, batch in enumerate(valid_itr):
+        if j > args.valid_steps:
+            break
 
-        batch = next(valid_itr)
-        with torch.no_grad():
-            logits, input_lengths = run_step(model, batch, args.device, index2vocab)
+        try:
+            step_metrics = run_step(index2vocab, model, batch, args.device, args.verbose)
+            c_errors += step_metrics['c_errors']
+            w_errors += step_metrics['w_errors']
 
-
-            logits = torch.argmax(logits[0], -1).tolist()
-            input_lengths = input_lengths[0].item()
-            print([index2vocab[k] for k in logits[:input_lengths] if k not in [0, 1, 2]])
-            #print([index2vocab[b.item()] for b in batch[-2][0]])
-
-
-
+            c_total += step_metrics['c_total']
+            w_total += step_metrics['w_total']
+            metrics['cer'] = (c_errors / c_total) * 100
+            metrics['wer'] = (w_errors / w_total) * 100
+            if j % args.steps_per_update == 0:
+                logger.info(metrics)
+        except Exception as e:
+            logger.error(e)
 
 
 if __name__ == "__main__":

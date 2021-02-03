@@ -39,16 +39,18 @@ def _is_batch_full(num_sentences, num_tokens, max_tokens, max_sentences):
     return False
 
 
-def batch_by_size(indices, max_tokens, max_sentences=128, bsz_mult=1):
-
+def batch_by_size(
+    indices, sizes, max_tokens=None, max_sentences=128,
+):
     sample_len = 0
     sample_lens = []
     batch = []
     batches = []
+    indices_view = indices
 
-    for f in indices:
-        idx = f[0]
-        num_tokens = f[2]
+    for i in range(len(indices_view)):
+        idx = indices_view[i]
+        num_tokens = sizes[idx]
         sample_lens.append(num_tokens)
         sample_len = max(sample_len, num_tokens)
 
@@ -59,13 +61,10 @@ def batch_by_size(indices, max_tokens, max_sentences=128, bsz_mult=1):
         num_tokens = (len(batch) + 1) * sample_len
 
         if _is_batch_full(len(batch), num_tokens, max_tokens, max_sentences):
-            mod_len = max(
-                bsz_mult * (len(batch) // bsz_mult),
-                len(batch) % bsz_mult,
-            )
-            batches.append(batch[:mod_len])
-            batch = batch[mod_len:]
-            sample_lens = sample_lens[mod_len:]
+            batch_len = len(batch)
+            batches.append(batch[:batch_len])
+            batch = batch[batch_len:]
+            sample_lens = sample_lens[batch_len:]
             sample_len = max(sample_lens) if len(sample_lens) > 0 else 0
         batch.append(idx)
     if len(batch) > 0:
@@ -82,6 +81,7 @@ class AudioTextLetterDataset(IterableDataset):
     """
     def __init__(self, tsv_file, vocab, target_tokens_per_batch, max_src_length, distribute=True, shuffle=True, max_dst_length=1200):
         super().__init__()
+        self.min_src_length = 0  # TODO: remove?
         self.max_src_length = max_src_length
         self.max_dst_length = max_dst_length
 
@@ -104,6 +104,8 @@ class AudioTextLetterDataset(IterableDataset):
 
     def _read_tsv_file(self, tsv_file):
         self.files = []
+        self.sizes = []
+        self.tokens = []
         with open(tsv_file, "r") as f:
             self.directory = f.readline().strip()
             transcription_file = tsv_file.replace('tsv', 'ltr')
@@ -113,14 +115,24 @@ class AudioTextLetterDataset(IterableDataset):
                     path = os.path.join(self.directory, basename)
 
                     x_length = int(x_length)
+                    if x_length < self.min_src_length or x_length > self.max_src_length:
+                        continue
                     text = self._read_transcription(transcription)
                     tokens = np.array([self.w2i[t] for t in text])
-                    y_length = len(tokens)
 
-                    self.files.append((i, path, x_length, y_length, tokens))
-        sorted(self.files, key=lambda item: item[2])
-        self.batches = batch_by_size(self.files, self.max_elems_per_batch)
-        sorted(self.files, key=lambda item: item[0])
+                    self.files.append(path)
+                    self.sizes.append(x_length)
+                    self.tokens.append(tokens)
+        # The idea in this code is to sort it by length, if you do that the index changes, which is why we
+        # store the original index in the tuple at index 0
+        keys = np.arange(len(self.files)) if not self.shuffle else np.random.permutation(len(self.files))
+        indices = np.lexsort((keys, self.sizes))[::-1]
+
+        self.batches = batch_by_size(
+            indices, self.sizes, self.max_elems_per_batch, max_sentences=128,
+        )
+        print(torch.mean(torch.tensor([len(b) for b in self.batches]).float()).item())
+
 
     def _get_worker_info(self):
         return torch.utils.data.get_worker_info() if self.distribute else None
@@ -163,8 +175,8 @@ class AudioTextLetterDataset(IterableDataset):
                 audio_lengths = np.zeros(len(batch), dtype=np.int32)
                 text_lengths = np.zeros(len(batch), dtype=np.int32)
                 for i, idx in enumerate(batch):
-                    idz, pth, src_length, dst_length, tokens = self.files[idx]
-                    assert idz == idx
+                    pth = self.files[idx]
+                    tokens = self.tokens[idx]
                     if len(tokens) > self.max_dst_length:
                         raise Exception(f"Tokens too long {len(tokens)}")
                     len_text = min(self.max_dst_length, len(tokens))

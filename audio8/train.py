@@ -20,8 +20,7 @@ from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, Offset
 from eight_mile.optz import *
 from eight_mile.pytorch.layers import save_checkpoint, init_distributed, sequence_mask, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
-import torch.nn.functional as F
-
+from ctc import CTCLoss, ctc_metrics
 
 logger = logging.getLogger(__file__)
 Offsets.GO = 0
@@ -30,29 +29,6 @@ Offsets.VALUES[Offsets.GO] = '<s>'
 Offsets.VALUES[Offsets.PAD] = '<pad>'
 Offsets.VALUES[Offsets.EOS] = '</s>'
 Offsets.VALUES[Offsets.UNK] = '<unk>'
-
-class CTCLoss(nn.Module):
-    def __init__(self, zero_infinity=True):
-        super().__init__()
-        self.zero_infinity = zero_infinity
-
-    # The input length signal seems to be irrelevant
-    # unless we can apply the filter length transformation to figure it out
-    def forward(self, log_prob, input_lengths, targets, target_lengths):
-        pad_mask = (targets != Offsets.PAD) & (targets != Offsets.EOS)
-        targets_flat = targets.masked_select(pad_mask)
-
-        #with torch.backends.cudnn.flags(enabled=False):
-        loss = F.ctc_loss(
-            log_prob,
-            targets_flat,
-            input_lengths,
-            target_lengths,
-            blank=Offsets.GO,
-            reduction="sum",
-            zero_infinity=self.zero_infinity,
-        )
-        return loss
 
 
 def read_vocab_file(vocab_file: str):
@@ -66,15 +42,24 @@ def read_vocab_file(vocab_file: str):
         return {v: i for i, v in enumerate(vocab)}
 
 
-def run_step(model, batch, loss_function, device):
+
+def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True):
     inputs, input_lengths, targets, target_lengths = batch
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
     targets = targets.to(device)
-    logits, valid_lengths = model(inputs, pad_mask)
-    loss = loss_function(logits.transpose(1, 0), valid_lengths, targets, target_lengths)
+    logits, output_lengths = model(inputs, pad_mask)
+    loss = loss_function(logits.transpose(1, 0), output_lengths, targets, target_lengths)
     logits = logits.detach().cpu()
-    return loss, logits, pad_mask
+    metrics = {}
+    metrics['batch_size'] = inputs.shape[0]
+    if not training:
+        if verbose:
+            logits = torch.argmax(logits[0], -1).tolist()
+            input_lengths = input_lengths[0].item()
+            print([index2vocab[k] for k in logits[:input_lengths] if k not in [0, 1, 2]])
+        metrics = ctc_metrics(logits, targets, input_lengths, index2vocab)
+    return loss, metrics
 
 
 def train():
@@ -101,25 +86,21 @@ def train():
     parser.add_argument("--lr_decay_rate", type=float, help="decay rate of lr scheduler")
     parser.add_argument("--lr_alpha", type=float, default=0., help="parameter alpha for cosine decay scheduler")
     parser.add_argument("--optim", default="adamw", type=str, help="Optimizer to use (defaults to adamw)")
-    parser.add_argument("--lr", type=float, default=4.0e-4, help="Learning rate")
-    parser.add_argument("--clip", type=float, default=1.0, help="Clipping gradient norm")
+    parser.add_argument("--lr", type=float, default=2.0e-5, help="Learning rate")
+    parser.add_argument("--clip", type=float, default=25.0, help="Clipping gradient norm")
     parser.add_argument("--weight_decay", type=float, default=1.0e-2, help="Weight decay")
     parser.add_argument("--restart_tt", type=str, help="Optional param for legacy checkpoints", choices=['step', 'epoch', 'ignore'])
     parser.add_argument("--restart_from", type=str, help="Option allows you to restart from a previous checkpoint")
     parser.add_argument("--warmup_steps", type=int, default=10000, help="Num warmup steps")
     parser.add_argument("--epochs", type=int, default=32, help="Num training epochs")
     parser.add_argument("--saves_per_epoch", type=int, default=10, help="The number of saves per epoch")
-    parser.add_argument("--preprocessed", type=str2bool, default=True, help="Has the data already been preprocessed?")
     parser.add_argument("--model_type", default="wav2vec2")
     parser.add_argument("--unfreeze_enc_after_step", default=10_000)
     parser.add_argument("--train_steps", type=int, default=400_000, help="Num training steps")
     parser.add_argument("--valid_steps", type=int, default=1000, help="Num valid steps to evaluate each time")
-    parser.add_argument("--buckets", type=int, nargs="+",
-                        help="Bucket sizes if bucketing",
-                        default=[11111, 35714, 38461, 41666, 45454, 50000, 55555, 62500, 71428, 83333, 100000, 125000, 166666,
-                                 250000, 275000, 300000, 325000])#, 350000, 400000, 425000])
+    parser.add_argument("--steps_per_update", type=int, default=100)
     parser.add_argument("--steps_per_checkpoint", type=int, default=1000, help="The number of steps per checkpoint")
-
+    parser.add_argument("--verbose", type=str2bool, help="Verbose", default=False)
     parser.add_argument("--device", type=str,
                         default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")
@@ -136,10 +117,13 @@ def train():
 
     args = parser.parse_args()
 
+    # Get the basedir to save results and checkpoints
     if args.basedir is None:
         args.basedir = f'{args.model_type}-{args.dataset_key}-{os.getpid()}'
-    logging.basicConfig(level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN)
     os.makedirs(args.basedir, exist_ok=True)
+
+    # Setup logger
+    logging.basicConfig(level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN)
     num_gpus = get_num_gpus_multiworker()
     args.distributed = args.distributed or num_gpus > 1
     logger.info(f"Using {num_gpus} GPUs in this job.")
@@ -154,7 +138,7 @@ def train():
     train_dataset = os.path.join(args.root_dir, args.train_dataset)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
-    train_set = AudioTextLetterDataset(train_dataset, vocab, args.target_tokens_per_batch, 325000, shuffle=True)
+    train_set = AudioTextLetterDataset(train_dataset, vocab, args.target_tokens_per_batch, 325000, shuffle=True, distribute=args.distributed)
     valid_set = AudioTextLetterDataset(valid_dataset, vocab, args.target_tokens_per_batch, 325000, distribute=False, shuffle=False)
     train_loader = DataLoader(train_set, batch_size=None)  # , num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
@@ -168,27 +152,26 @@ def train():
     loss_function = CTCLoss().to(args.device)
     logger.info("Loaded model and loss")
 
-    # according to pytorch, len(train_loader) will return len(train_set) when train_set is IterableDataset, so manually
-    # correct it here
-
-    #steps_per_epoch = len(train_loader) // (args.batch_size * args.grad_accum * num_gpus)
-    # according to pytorch, len(train_loader) will return len(train_set) when train_set is IterableDataset, so manually
-    # correct it here
-    valid_steps = args.valid_steps
     update_on = args.steps_per_checkpoint
-    validate_on = update_on * 10
+    validate_on = min(args.train_steps//2, update_on * 10)
     report_on = max(10, update_on) // 10
     lr_decay = CosineDecaySchedulerPyTorch(decay_steps=args.train_steps, alpha=args.lr_alpha, lr=args.lr)
     linear_warmup = WarmupLinearSchedulerPyTorch(args.warmup_steps, lr=args.lr)
     lr_sched = CompositeLRScheduler(linear_warmup, lr_decay, lr=args.lr)
-
 
     global_step = 0
     start_epoch = 0
     if args.restart_from:
 
         if args.restart_from.endswith('.pt'):
-            print(load_fairseq_bin(model.encoder, args.restart_from))
+            # The pretrained fairseq checkpoints differ depending on whether they are pretrained wav2vec2
+            # or wav2vec2-ctc.  First, we try loading as pretrained wav2vec2, then back off to ctc
+            try:
+                unmapped = load_fairseq_bin(model.encoder, args.restart_from)
+            except:
+                unmapped = load_fairseq_bin(model, args.restart_from, ctc=True)
+            print(unmapped)
+            args.tick_type = None
         else:
             if os.path.isdir(args.restart_from):
                 args.restart_from, _ = find_latest_checkpoint(args.restart_from)
@@ -201,7 +184,7 @@ def train():
             step_num = int(vec[-1].split(".")[0])
             if tick_type == 'step':
                 global_step = step_num
-            else:
+            elif tick_type:
                 logger.warning(f"The previous tick was {step_num} but command-line specifies to ignore, setting to 0")
 
             logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d, epoch=%d",
@@ -229,6 +212,8 @@ def train():
     start_of_run = 0
     avg_loss = Average('average_train_loss')
     step_time = Average('average_step_time')
+    batch_sizes = Average('batch_size')
+    model.train()
 
     for i in range(steps, args.train_steps):
 
@@ -237,11 +222,11 @@ def train():
         metrics = {}
         optimizer.zero_grad()
         start = time.time()
-        model.train()
         # This loader will iterate for ever
         batch = next(train_itr)
 
-        loss, logits, input_lengths = run_step(model, batch, loss_function, args.device)
+        loss, step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose)
+        batch_sizes.update(step_metrics['batch_size'])
         steps += 1
 
         try:
@@ -256,15 +241,11 @@ def train():
 
             if (steps + 1) % report_on == 0:
                 steps_per_sec = 1.0 / step_time.avg
-                logging.info('%s, steps/min %f, LR %.6f', avg_loss, steps_per_sec*60, optimizer.current_lr)
+                logging.info('%s, steps/min %f, LR %.6f, avg batch size %.2f', avg_loss, steps_per_sec*60, optimizer.current_lr, batch_sizes.avg)
 
             if (steps + 1) % update_on == 0 and args.local_rank < 1:
                 save_checkpoint(model, model_base, steps, tick_type='step')
             if (steps + 1) % validate_on == 0 and args.local_rank < 1:
-                # How much time elapsed in minutes
-                elapsed = (time.time() - start_of_run) / 60
-                metrics['train_elapsed_min'] = elapsed
-
                 train_token_loss = avg_loss.avg
                 metrics['average_train_loss'] = train_token_loss
                 avg_valid_loss = Average('average_valid_loss')
@@ -272,30 +253,39 @@ def train():
                 model.eval()
                 valid_start = time.time()
                 valid_itr = iter(valid_loader)
-                for j in range(valid_steps):
-                    batch = next(valid_itr)
-                    with torch.no_grad():
-                        loss, logits, input_lengths = run_step(model, batch, loss_function, args.device, True)
-                        if j % 10 == 0:
-                            logits = torch.argmax(logits[0], -1)
-                            input_lengths = input_lengths[0].item()
-                            print([index2vocab[k] for k in logits[:input_lengths]])
-                        avg_valid_loss.update(loss.item())
+                c_errors = 0
+                c_total = 0
+                w_errors = 0
+                w_total = 0
 
-                valid_token_loss = avg_valid_loss.avg
-                metrics['average_valid_loss'] = valid_token_loss
-                elapsed = (time.time() - valid_start) / 60
-                metrics['valid_elapsed_epoch'] = elapsed
+                valid_metrics = {}
+                for j, batch in enumerate(valid_itr):
+                    if j > args.valid_steps:
+                        break
+
+                    try:
+                        with torch.no_grad():
+                            loss, valid_step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, verbose=args.verbose, training=False)
+                        c_errors += valid_step_metrics['c_errors']
+                        w_errors += valid_step_metrics['w_errors']
+                        c_total += valid_step_metrics['c_total']
+                        w_total += valid_step_metrics['w_total']
+                        avg_valid_loss.update(loss.item())
+                        elapsed = time.time() - valid_start
+                        valid_token_loss = avg_valid_loss.avg
+                        valid_metrics['average_valid_loss'] = valid_token_loss
+                        valid_metrics['valid_elapsed_epoch'] = elapsed
+                        valid_metrics['cer'] = (c_errors / c_total) * 100
+                        valid_metrics['wer'] = (w_errors / w_total) * 100
+                        if j % args.steps_per_update == 0:
+                            logger.info(valid_metrics)
+                    except Exception as e:
+                        logger.error(e)
+
                 logger.info(metrics)
                 model.train()
         except Exception as e:
-            print(e)
-            h = nvmlDeviceGetHandleByIndex(0)
-            info = nvmlDeviceGetMemoryInfo(h)
-            print(f'total    : {info.total}')
-            print(f'free     : {info.free}')
-            print(f'used     : {info.used}')
-
+            logger.error(e)
 
 
 if __name__ == "__main__":

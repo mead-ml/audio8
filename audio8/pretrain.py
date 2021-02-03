@@ -22,7 +22,6 @@ import torch.nn.functional as F
 logger = logging.getLogger(__file__)
 
 
-
 def train():
     parser = ArgumentParser()
     parser.add_argument("--basedir", type=str)
