@@ -2,10 +2,10 @@
 
 """
 
-from torchaudio.datasets import LIBRISPEECH
-from torchaudio.datasets.utils import walk_files
+
 from typing import Tuple, Dict
 import logging
+import json
 import time
 import numpy as np
 import os
@@ -17,75 +17,320 @@ from eight_mile.utils import Offsets
 from eight_mile.pytorch.optz import *
 logger = logging.getLogger(__file__)
 
+def pad_init(shp, dtype=np.int32):
+    return np.zeros(shp, dtype=dtype)
 
-class LibriSpeechDataset(LIBRISPEECH):
-    """The base class is non-trivial to figure out for cases when we have LS on the hard-drive
+def find_next_fit(v, fits):
+    sz = 0
+    for fit in fits:
+        if v < fit:
+            sz = fit
+
+    return sz
 
 
-    Simplify by checking if the path already exists on the drive first
-    Args:
-        root (str): Path to the directory where the dataset is found or downloaded.
-        url (str, optional): The URL to download the dataset from,
-            or the type of the dataset to dowload.
-            Allowed type values are ``"dev-clean"``, ``"dev-other"``, ``"test-clean"``,
-            ``"test-other"``, ``"train-clean-100"``, ``"train-clean-360"`` and
-            ``"train-other-500"``. (default: ``"train-clean-100"``)
-        folder_in_archive (str, optional):
-            The top-level directory of the dataset. (default: ``"LibriSpeech"``)
-        download (bool, optional):
-            Whether to download the dataset if it is not found at root path. (default: ``False``).
-    """
+def _is_batch_full(num_sentences, num_tokens, max_tokens, max_sentences):
+    if num_sentences == 0:
+        return False
+    if max_sentences > 0 and num_sentences == max_sentences:
+        return True
+    if max_tokens > 0 and num_tokens > max_tokens:
+        return True
+    return False
 
-    _ext_txt = ".trans.txt"
-    _ext_audio = ".flac"
 
-    def __init__(self,
-                 graphemes: Dict[str, int],
-                 root: str,
-                 url: str = 'train-clean-100',
-                 folder_in_archive: str = "LibriSpeech",
-                 download: bool = False) -> None:
+def batch_by_size(
+    indices, sizes, max_tokens=None, max_sentences=128,
+):
+    sample_len = 0
+    sample_lens = []
+    batch = []
+    batches = []
+    indices_view = indices
 
-        self.graphemes = graphemes
-        target_dir = os.path.join(root, folder_in_archive, url)
-        if not os.path.exists(target_dir):
-            super().__init__(root, url, folder_in_archive, download)
-        self._path = target_dir
-        walker = walk_files(
-            self._path, suffix=self._ext_audio, prefix=False, remove_suffix=True
+    for i in range(len(indices_view)):
+        idx = indices_view[i]
+        num_tokens = sizes[idx]
+        sample_lens.append(num_tokens)
+        sample_len = max(sample_len, num_tokens)
+
+        assert max_tokens <= 0 or sample_len <= max_tokens, (
+            "sentence at index {} of size {} exceeds max_tokens "
+            "limit of {}!".format(idx, sample_len, max_tokens)
         )
-        self._walker = list(walker)
+        num_tokens = (len(batch) + 1) * sample_len
 
-    def __getitem__(self, n: int) -> Tuple[torch.Tensor, int, str, int, int, int]:
-        """Load the n-th sample from the dataset.
+        if _is_batch_full(len(batch), num_tokens, max_tokens, max_sentences):
+            batch_len = len(batch)
+            batches.append(batch[:batch_len])
+            batch = batch[batch_len:]
+            sample_lens = sample_lens[batch_len:]
+            sample_len = max(sample_lens) if len(sample_lens) > 0 else 0
+        batch.append(idx)
+    if len(batch) > 0:
+        batches.append(batch)
+    return batches
 
-        Args:
-            n (int): The index of the sample to be loaded
 
-        Returns:
-            tuple: ``(waveform, sample_rate, utterance, speaker_id, chapter_id, utterance_id)``
+class AudioTextLetterDataset(IterableDataset):
+    """In this dataset, we get in a couple of things
+    1. 2 TSV files that contain all of the training and valid samples
+    2. 2 LTR files that contain all of the grapheme transcriptions, presumed in the same order as the input
+
+    I am going to assume that the LTR files live in the same directory as the TSV files for now
+    """
+    def __init__(self, tsv_file, vocab, target_tokens_per_batch, max_src_length, distribute=True, shuffle=True, max_dst_length=1200):
+        super().__init__()
+        self.min_src_length = 0  # TODO: remove?
+        self.max_src_length = max_src_length
+        self.max_dst_length = max_dst_length
+
+        self.w2i = vocab
+        self.tsv_file = tsv_file
+        self.rank = 0
+        self.world_size = 1
+        self.files = []
+        self.max_elems_per_batch = target_tokens_per_batch
+        self.shuffle = shuffle
+        self.distribute = distribute
+        if torch.distributed.is_initialized() and distribute:
+            self.rank = torch.distributed.get_rank()
+            self.world_size = torch.distributed.get_world_size()
+
+        self._read_tsv_file(tsv_file)
+
+    def _read_transcription(self, transcription):
+        return transcription.split()
+
+    def _read_tsv_file(self, tsv_file):
+        self.files = []
+        self.sizes = []
+        self.tokens = []
+        with open(tsv_file, "r") as f:
+            self.directory = f.readline().strip()
+            transcription_file = tsv_file.replace('tsv', 'ltr')
+            with open(transcription_file) as rf:
+                for i, (audio, transcription) in enumerate(zip(f, rf)):
+                    basename, x_length = audio.split('\t')
+                    path = os.path.join(self.directory, basename)
+
+                    x_length = int(x_length)
+                    if x_length < self.min_src_length or x_length > self.max_src_length:
+                        continue
+                    text = self._read_transcription(transcription)
+                    tokens = np.array([self.w2i[t] for t in text])
+
+                    self.files.append(path)
+                    self.sizes.append(x_length)
+                    self.tokens.append(tokens)
+        # The idea in this code is to sort it by length, if you do that the index changes, which is why we
+        # store the original index in the tuple at index 0
+        keys = np.arange(len(self.files)) if not self.shuffle else np.random.permutation(len(self.files))
+        indices = np.lexsort((keys, self.sizes))[::-1]
+
+        self.batches = batch_by_size(
+            indices, self.sizes, self.max_elems_per_batch, max_sentences=128,
+        )
+        print(torch.mean(torch.tensor([len(b) for b in self.batches]).float()).item())
+
+
+    def _get_worker_info(self):
+        return torch.utils.data.get_worker_info() if self.distribute else None
+
+    def _init_read_order(self):
+        # Each node has the same worker_info, so the unique offsets for each is
+        # rank * num_workers + worker_id
+        # and the total available workers is world_size * num_workers
+        worker_info = self._get_worker_info()
+
+        if worker_info is None:
+            num_workers_per_node = 1
+            node_worker_id = 0
+        else:
+            num_workers_per_node = worker_info.num_workers
+            node_worker_id = worker_info.id
+        all_workers = (self.world_size * num_workers_per_node)
+        offset = self.rank * num_workers_per_node + node_worker_id
+        read_file_order = list(range(offset, len(self.batches), all_workers))
+        if not read_file_order:
+            if offset > 0:
+                # This is probably wrong
+                logger.warning(f"There are no files to read for worker {node_worker_id}, offset {offset}!" +
+                               " This might mean that you are passing an incorrect training or validation directory")
+            else:
+                # This is definitely wrong
+                raise Exception(f"No files of pattern {self.pattern} were found in {self.directory}!")
+        return read_file_order, node_worker_id
+
+    def __iter__(self):
+        read_order, _ = self._init_read_order()
+        # If we have multiple files per worker, possibly shuffle the file read order
+        while True:
+            if self.shuffle:
+                random.shuffle(read_order)
+            for rd in read_order:
+                batch = self.batches[rd]
+                zp_text = np.ones((len(batch), self.max_dst_length), dtype=np.int32)
+                zp_audio = np.zeros((len(batch), self.max_src_length), dtype=np.float32)
+                audio_lengths = np.zeros(len(batch), dtype=np.int32)
+                text_lengths = np.zeros(len(batch), dtype=np.int32)
+                for i, idx in enumerate(batch):
+                    pth = self.files[idx]
+                    tokens = self.tokens[idx]
+                    if len(tokens) > self.max_dst_length:
+                        raise Exception(f"Tokens too long {len(tokens)}")
+                    len_text = min(self.max_dst_length, len(tokens))
+                    zp_text[i, :len_text] = tokens[:len_text]
+                    audio = self.process_sample(pth)
+                    zp_audio[i, :len(audio)] = audio
+                    audio_lengths[i] = len(audio)
+                    text_lengths[i] = len_text
+
+                mx_src_seen = audio_lengths.max()
+                if mx_src_seen > self.max_src_length:
+                    raise Exception(f'Uh oh {mx_src_seen}')
+                mx_dst_seen = min(text_lengths.max(), self.max_dst_length)
+                yield zp_audio[:, :mx_src_seen], audio_lengths, zp_text[:, :mx_dst_seen], text_lengths
+
+    def process_sample(self, file):
+        """Read in a line and turn it into an entry.  FIXME, get from anywhere
+
+        The entries will get collated by the data loader
+
+        :param file:
+        :return:
         """
-        item = super().__getitem__(n)
-        unpadded = np.array([self.graphemes.get(v, Offsets.GO) for v in item[2]])
-        src_length = item[0].shape[-1]
-        tgt_length = len(unpadded)
+        wav, _ = sf.read(file)
+        wav = wav.astype(np.float32)
+        return wav
 
-        return {'src': item[0].squeeze(), 'src_length': src_length, 'tgt': unpadded, 'tgt_length': tgt_length}
+class BucketingAudioTextLetterDataset(IterableDataset):
+    """In this dataset, we get in a couple of things
+    1. 2 TSV files that contain all of the training and valid samples
+    2. 2 LTR files that contain all of the grapheme transcriptions, presumed in the same order as the input
 
-def collate_fn(batch_list):
-    B = len(batch_list)
-    src_length = torch.tensor([f['src_length'] for f in batch_list])
-    max_src_length = src_length.max().item()
-    tgt_length = torch.tensor([f['tgt_length'] for f in batch_list])
-    max_tgt_length = tgt_length.max().item()
-    src = np.zeros((B, max_src_length), dtype=np.float32)
-    tgt = np.zeros((B, max_tgt_length), dtype=np.int32)
-    for i in range(B):
-        l = len(batch_list[i]['src'])
-        src[i, :l] = batch_list[i]['src']
-        l = len(batch_list[i]['tgt'])
-        tgt[i, :l] = batch_list[i]['tgt']
-    return torch.from_numpy(src), src_length, torch.from_numpy(tgt), tgt_length
+    I am going to assume that the LTR files live in the same directory as the TSV files for now
+    """
+    def __init__(self, buckets, tsv_file, vocab, target_tokens_per_batch, distribute=True, shuffle=True, max_dst_length=120):
+        super().__init__()
+        self.bucket_lengths = buckets
+        self.max_dst_length = max_dst_length
+        self.w2i = vocab
+        self.tsv_file = tsv_file
+        self.rank = 0
+        self.world_size = 1
+        self.files = []
+        self.target_tokens_per_batch = target_tokens_per_batch
+        self.shuffle = shuffle
+        self.distribute = distribute
+        if torch.distributed.is_initialized() and distribute:
+            self.rank = torch.distributed.get_rank()
+            self.world_size = torch.distributed.get_world_size()
+
+        self._read_tsv_file(tsv_file)
+
+    def _read_transcription(self, transcription):
+        return transcription.split()
+
+    def _read_tsv_file(self, tsv_file):
+        asc = sorted(self.bucket_lengths)
+        self.files = {b: [] for b in asc}
+        with open(tsv_file, "r") as f:
+            self.directory = f.readline().strip()
+            transcription_file = tsv_file.replace('tsv', 'ltr')
+            with open(transcription_file) as rf:
+                for audio, transcription in zip(f, rf):
+                    basename, x_length = audio.split('\t')
+                    path = os.path.join(self.directory, basename)
+
+                    x_length = int(x_length)
+                    count = find_next_fit(x_length, self.bucket_lengths)
+                    text = self._read_transcription(transcription)
+                    tokens = np.array([self.w2i[t] for t in text])
+                    y_length = len(tokens)
+
+                    if count == 0:
+                        print(x_length)
+                        continue
+                    self.files[count].append((path, x_length, y_length, tokens))
+
+    def _get_worker_info(self):
+        return torch.utils.data.get_worker_info() if self.distribute else None
+
+    def _init_read_order(self):
+        # Each node has the same worker_info, so the unique offsets for each is
+        # rank * num_workers + worker_id
+        # and the total available workers is world_size * num_workers
+        worker_info = self._get_worker_info()
+
+        if worker_info is None:
+            num_workers_per_node = 1
+            node_worker_id = 0
+        else:
+            num_workers_per_node = worker_info.num_workers
+            node_worker_id = worker_info.id
+        all_workers = (self.world_size * num_workers_per_node)
+        offset = self.rank * num_workers_per_node + node_worker_id
+        read_file_order = list(range(offset, len(self.files), all_workers))
+        if not read_file_order:
+            if offset > 0:
+                # This is probably wrong
+                logger.warning(f"There are no files to read for worker {node_worker_id}, offset {offset}!" +
+                               " This might mean that you are passing an incorrect training or validation directory")
+            else:
+                # This is definitely wrong
+                raise Exception(f"No files of pattern {self.pattern} were found in {self.directory}!")
+        return read_file_order, node_worker_id
+
+    def __iter__(self):
+        read_file_order, _ = self._init_read_order()
+        keys = list(self.files.keys())
+        # If we have multiple files per worker, possibly shuffle the file read order
+        while True:
+            if self.shuffle:
+                random.shuffle(read_file_order)
+            for bucket_idx in read_file_order:
+                bucket = keys[bucket_idx]
+                num_samples = max(self.target_tokens_per_batch // bucket, 1)
+                audio_samples = []
+                audio_lengths = []
+                text_samples = []
+                text_lengths = []
+                for (file, x_length, y_length, tokens) in self.files[bucket]:
+
+                    #text = np.array([self.w2i[t] for t in tokens])
+                    zp_text = pad_init(self.max_dst_length)
+                    l = min(self.max_dst_length, len(tokens))
+                    zp_text[:l] = tokens[:l]
+                    text_lengths.append(l)
+                    zp_audio = pad_init(bucket, dtype=np.float32)
+                    audio = self.process_sample(file)
+                    zp_audio[:len(audio)] = audio
+                    audio_lengths.append(len(audio))
+                    audio_samples.append(zp_audio)
+                    text_samples.append(zp_text)
+                    if len(audio_samples) == num_samples:
+                        pair = np.stack(audio_samples), np.stack(audio_lengths), np.stack(text_samples), np.stack(text_lengths)
+                        audio_samples = []
+                        audio_lengths = []
+                        text_samples = []
+                        text_lengths = []
+                        yield pair
+                if audio_samples:
+                    pair = np.stack(audio_samples), np.stack(audio_lengths), np.stack(text_samples), np.stack(text_lengths)
+                    yield pair
+
+    def process_sample(self, file):
+        """Read in a line and turn it into an entry.  FIXME, get from anywhere
+
+        The entries will get collated by the data loader
+
+        :param file:
+        :return:
+        """
+        wav, _ = sf.read(file)
+        wav = wav.astype(np.float32)
+        return wav
 
 
 class AudioFileDataset(IterableDataset):
@@ -158,6 +403,7 @@ class AudioFileDataset(IterableDataset):
             for file_idx in read_file_order:
                 file, _ = self.files[file_idx]
                 yield self.process_sample(file, self.max_length)
+
 
     def process_sample(self, file, len):
         """Read in a line and turn it into an entry.  FIXME, get from anywhere

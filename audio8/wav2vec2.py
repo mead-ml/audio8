@@ -4,9 +4,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import math
-from eight_mile.pytorch.layers import pytorch_conv1d, Conv1DSame, TransformerEncoderStack, Dense
-
-
+from eight_mile.pytorch.layers import pytorch_conv1d, pytorch_linear, Conv1DSame, TransformerEncoderStack, Dense
+import contextlib
+from collections import namedtuple
 CONV_FEATURES = {16: [(512, 10, 5), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 2, 2), (512, 2, 2)],
                  8: [(512, 10, 5), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 2, 2), (512, 2, 2)]}
 
@@ -19,37 +19,94 @@ DIVERSITY_WGT = 10
 
 
 
-W2V2_FAIRSEQ_NESTED_LAYERS_MAP = {
-    'encoder.layers.{}.self_attn.k_proj.weight':     'encoder.transformer.encoders.{}.self_attn.w_K.layer.weight',
-    'encoder.layers.{}.self_attn.k_proj.bias':       'encoder.transformer.encoders.{}.self_attn.w_K.layer.bias',
-    'encoder.layers.{}.self_attn.v_proj.weight':     'encoder.transformer.encoders.{}.self_attn.w_V.layer.weight',
-    'encoder.layers.{}.self_attn.v_proj.bias':       'encoder.transformer.encoders.{}.self_attn.w_V.layer.bias',
-    'encoder.layers.{}.self_attn.q_proj.weight':     'encoder.transformer.encoders.{}.self_attn.w_Q.layer.weight',
-    'encoder.layers.{}.self_attn.q_proj.bias':       'encoder.transformer.encoders.{}.self_attn.w_Q.layer.bias',
-    'encoder.layers.{}.self_attn.out_proj.weight':   'encoder.transformer.encoders.{}.self_attn.w_O.layer.weight',
-    'encoder.layers.{}.self_attn.out_proj.bias':     'encoder.transformer.encoders.{}.self_attn.w_O.layer.bias',
+
+W2V_CTC_NESTED_MAP = {
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.k_proj.weight':     'encoder.encoder.transformer.encoders.{}.self_attn.w_K.layer.weight',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.k_proj.bias':       'encoder.encoder.transformer.encoders.{}.self_attn.w_K.layer.bias',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.v_proj.weight':     'encoder.encoder.transformer.encoders.{}.self_attn.w_V.layer.weight',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.v_proj.bias':       'encoder.encoder.transformer.encoders.{}.self_attn.w_V.layer.bias',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.q_proj.weight':     'encoder.encoder.transformer.encoders.{}.self_attn.w_Q.layer.weight',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.q_proj.bias':       'encoder.encoder.transformer.encoders.{}.self_attn.w_Q.layer.bias',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.out_proj.weight':   'encoder.encoder.transformer.encoders.{}.self_attn.w_O.layer.weight',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.out_proj.bias':     'encoder.encoder.transformer.encoders.{}.self_attn.w_O.layer.bias',
     # Wav2vec2 ref impl is run with LN first
-    'encoder.layers.{}.self_attn_layer_norm.weight': 'encoder.transformer.encoders.{}.ln1.weight',
-    'encoder.layers.{}.self_attn_layer_norm.bias':   'encoder.transformer.encoders.{}.ln1.bias',
-    'encoder.layers.{}.fc1.weight': 'encoder.transformer.encoders.{}.ffn.0.layer.weight',
-    'encoder.layers.{}.fc1.bias':   'encoder.transformer.encoders.{}.ffn.0.layer.bias',
-    'encoder.layers.{}.fc2.weight': 'encoder.transformer.encoders.{}.ffn.3.layer.weight',
-    'encoder.layers.{}.fc2.bias':   'encoder.transformer.encoders.{}.ffn.3.layer.bias',
-    'encoder.layers.{}.final_layer_norm.weight':  'encoder.transformer.encoders.{}.ln2.weight',
-    'encoder.layers.{}.final_layer_norm.bias':   'encoder.transformer.encoders.{}.ln2.bias'
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn_layer_norm.weight': 'encoder.encoder.transformer.encoders.{}.ln2.weight',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn_layer_norm.bias':   'encoder.encoder.transformer.encoders.{}.ln2.bias',
+    'w2v_encoder.w2v_model.encoder.layers.{}.fc1.weight': 'encoder.encoder.transformer.encoders.{}.ffn.0.layer.weight',
+    'w2v_encoder.w2v_model.encoder.layers.{}.fc1.bias':   'encoder.encoder.transformer.encoders.{}.ffn.0.layer.bias',
+    'w2v_encoder.w2v_model.encoder.layers.{}.fc2.weight': 'encoder.encoder.transformer.encoders.{}.ffn.3.layer.weight',
+    'w2v_encoder.w2v_model.encoder.layers.{}.fc2.bias':   'encoder.encoder.transformer.encoders.{}.ffn.3.layer.bias',
+    'w2v_encoder.w2v_model.encoder.layers.{}.final_layer_norm.weight':  'encoder.encoder.transformer.encoders.{}.ln1.weight',
+    'w2v_encoder.w2v_model.encoder.layers.{}.final_layer_norm.bias':   'encoder.encoder.transformer.encoders.{}.ln1.bias'
 
 }
 
 # We use a primitive from 8mi called Dense which owns the linear as a sub-layer, so convert those
-W2V2_FAIRSEQ_FLAT_MAP = {
+W2V2_CTC_FLAT_MAP = {
+    'w2v_encoder.w2v_model.post_extract_proj.weight': 'encoder.proj_to_input.layer.weight',
+    'w2v_encoder.w2v_model.post_extract_proj.bias': 'encoder.proj_to_input.layer.bias',
+    #'w2v_encoder.w2v_model.project_q.weight': 'project_q.layer.weight',
+    #'w2v_encoder.w2v_model.project_q.bias': 'project_q.layer.bias',
+    #'w2v_encoder.w2v_model.final_proj.weight': 'final_proj.layer.weight',
+    #'w2v_encoder.w2v_model.final_proj.bias': 'final_proj.layer.bias',
+    'w2v_encoder.w2v_model.encoder.layer_norm.weight': 'encoder.encoder.ln.weight',
+    'w2v_encoder.w2v_model.encoder.layer_norm.bias': 'encoder.encoder.ln.bias',
+    'w2v_encoder.w2v_model.encoder.pos_conv.0.bias': 'encoder.encoder.pos_conv.conv.1.bias',
+    'w2v_encoder.w2v_model.encoder.pos_conv.0.weight_g': 'encoder.encoder.pos_conv.conv.1.weight_g',
+    'w2v_encoder.w2v_model.encoder.pos_conv.0.weight_v': 'encoder.encoder.pos_conv.conv.1.weight_v',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.0.0.weight': 'encoder.feature_extractor.conv_layers.0.0.weight',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.0.2.weight': 'encoder.feature_extractor.conv_layers.0.2.weight',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.0.2.bias': 'encoder.feature_extractor.conv_layers.0.2.bias',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.1.0.weight': 'encoder.feature_extractor.conv_layers.1.0.weight',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.2.0.weight': 'encoder.feature_extractor.conv_layers.2.0.weight',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.3.0.weight': 'encoder.feature_extractor.conv_layers.3.0.weight',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.4.0.weight': 'encoder.feature_extractor.conv_layers.4.0.weight',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.5.0.weight': 'encoder.feature_extractor.conv_layers.5.0.weight',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.6.0.weight': 'encoder.feature_extractor.conv_layers.6.0.weight',
+    'w2v_encoder.w2v_model.mask_emb': 'encoder.mask_emb',
+    'w2v_encoder.w2v_model.layer_norm.weight': 'encoder.layer_norm.weight',
+    'w2v_encoder.w2v_model.layer_norm.bias': 'encoder.layer_norm.bias',
+    'w2v_encoder.proj.weight': 'proj.weight',
+    'w2v_encoder.proj.bias': 'proj.bias'
+    #'layer_norm.weight': 'encoder.ln.weight',
+    #'layer_norm.bias': 'encoder.ln.bias'
+}
+
+
+CheckpointMapping = namedtuple('CheckpointMapping', ['nested', 'flat'])
+
+W2V_NESTED_MAP = {
+        'encoder.layers.{}.self_attn.k_proj.weight':     'encoder.transformer.encoders.{}.self_attn.w_K.layer.weight',
+        'encoder.layers.{}.self_attn.k_proj.bias':       'encoder.transformer.encoders.{}.self_attn.w_K.layer.bias',
+        'encoder.layers.{}.self_attn.v_proj.weight':     'encoder.transformer.encoders.{}.self_attn.w_V.layer.weight',
+        'encoder.layers.{}.self_attn.v_proj.bias':       'encoder.transformer.encoders.{}.self_attn.w_V.layer.bias',
+        'encoder.layers.{}.self_attn.q_proj.weight':     'encoder.transformer.encoders.{}.self_attn.w_Q.layer.weight',
+        'encoder.layers.{}.self_attn.q_proj.bias':       'encoder.transformer.encoders.{}.self_attn.w_Q.layer.bias',
+        'encoder.layers.{}.self_attn.out_proj.weight':   'encoder.transformer.encoders.{}.self_attn.w_O.layer.weight',
+        'encoder.layers.{}.self_attn.out_proj.bias':     'encoder.transformer.encoders.{}.self_attn.w_O.layer.bias',
+        # Wav2vec2 ref impl is run with LN first
+        'encoder.layers.{}.self_attn_layer_norm.weight': 'encoder.transformer.encoders.{}.ln2.weight',
+        'encoder.layers.{}.self_attn_layer_norm.bias':   'encoder.transformer.encoders.{}.ln2.bias',
+        'encoder.layers.{}.fc1.weight': 'encoder.transformer.encoders.{}.ffn.0.layer.weight',
+        'encoder.layers.{}.fc1.bias':   'encoder.transformer.encoders.{}.ffn.0.layer.bias',
+        'encoder.layers.{}.fc2.weight': 'encoder.transformer.encoders.{}.ffn.3.layer.weight',
+        'encoder.layers.{}.fc2.bias':   'encoder.transformer.encoders.{}.ffn.3.layer.bias',
+        'encoder.layers.{}.final_layer_norm.weight':  'encoder.transformer.encoders.{}.ln1.weight',
+        'encoder.layers.{}.final_layer_norm.bias':   'encoder.transformer.encoders.{}.ln1.bias'
+
+    }
+
+
+# We use a primitive from 8mi called Dense which owns the linear as a sub-layer, so convert those
+W2V2_FLAT_MAP = {
     'post_extract_proj.weight': 'proj_to_input.layer.weight',
     'post_extract_proj.bias': 'proj_to_input.layer.bias',
     'project_q.weight': 'project_q.layer.weight',
     'project_q.bias': 'project_q.layer.bias',
     'final_proj.weight': 'final_proj.layer.weight',
     'final_proj.bias': 'final_proj.layer.bias',
-    'encoder.layer_norm.weight': 'encoder.transformer.ln.weight',
-    'encoder.layer_norm.bias': 'encoder.transformer.ln.bias',
+    'encoder.layer_norm.weight': 'encoder.ln.weight',
+    'encoder.layer_norm.bias': 'encoder.ln.bias',
     'encoder.pos_conv.0.bias': 'encoder.pos_conv.conv.1.bias',
     'encoder.pos_conv.0.weight_g': 'encoder.pos_conv.conv.1.weight_g',
     'encoder.pos_conv.0.weight_v': 'encoder.pos_conv.conv.1.weight_v',
@@ -57,9 +114,12 @@ W2V2_FAIRSEQ_FLAT_MAP = {
     #'layer_norm.bias': 'encoder.ln.bias'
 }
 
+W2V_MAP = CheckpointMapping(nested=W2V_NESTED_MAP, flat=W2V2_FLAT_MAP)
+W2V_CTC_MAP = CheckpointMapping(nested=W2V_CTC_NESTED_MAP, flat=W2V2_CTC_FLAT_MAP)
 
 
-def convert_keys(num_layers: int, d: Dict, nested_layer_map: Dict = W2V2_FAIRSEQ_NESTED_LAYERS_MAP, flat_map: Dict = W2V2_FAIRSEQ_FLAT_MAP) -> Dict:
+
+def convert_keys(num_layers: int, d: Dict, nested_layer_map: Dict = W2V_MAP, flat_map: Dict = W2V2_FLAT_MAP) -> Dict:
 
     m = {}
     for i in range(num_layers):
@@ -75,12 +135,23 @@ def convert_keys(num_layers: int, d: Dict, nested_layer_map: Dict = W2V2_FAIRSEQ
 
     return m
 
-def load_fairseq_bin(w2v: nn.Module, bin_file: str, nested_layer_map=W2V2_FAIRSEQ_NESTED_LAYERS_MAP, flat_map=W2V2_FAIRSEQ_FLAT_MAP):
+def load_fairseq_bin(w2v: nn.Module, bin_file: str, ctc: bool=False):
+
+    if ctc:
+        checkpoint_mapping = W2V_CTC_MAP
+        transformer = w2v.encoder.encoder.transformer
+    else:
+        checkpoint_mapping = W2V_MAP
+        transformer = w2v.encoder.transformer
 
     d = torch.load(bin_file)["model"]
-    transformer = w2v.encoder.transformer
+
     num_layers = len(transformer.encoders)
-    mapped_keys = convert_keys(num_layers, d, nested_layer_map, flat_map)
+    mapped_keys = convert_keys(num_layers, d, checkpoint_mapping.nested, checkpoint_mapping.flat)
+    #for k in mapped_keys.keys():
+    #    if 'attn' in k:
+    #        t = mapped_keys[k].T
+    #        mapped_keys[k] = t
     unknown_keys = w2v.load_state_dict(mapped_keys, strict=False)
     missing_keys = [key for key in unknown_keys.missing_keys]
     return {'missing': missing_keys, 'unexpected': unknown_keys.unexpected_keys}
@@ -222,7 +293,7 @@ class ConvFeatureExtractionModel(nn.Module):
         for conv in self.conv_layers:
             x = conv(x)
         # BxCxT -> BxTxC
-        x = x.transpose(1, 2)
+        #x = x.transpose(1, 2)
         return x
 
 class GumbelVectorQuantizer(nn.Module):
@@ -384,11 +455,13 @@ class AudioTransformerEncoder(nn.Module):
             layers: int = 1,
             activation: str = "gelu",
             d_ff: Optional[int] = None,
+            conv_pos_kernel: int = 128,
+            conv_groups: int = 16,
             **kwargs):
         super().__init__()
         self.d_model = d_model
-        self.conv_pos_kernel = kwargs.get('conv_pos_kernel', 128)
-        self.conv_groups = kwargs.get('conv_groups', 16)
+        self.conv_pos_kernel = conv_pos_kernel
+        self.conv_groups = conv_groups
         self.dropout = nn.Dropout(pdrop)
 
         std = math.sqrt((4 * (1.0 - pdrop)) / (self.conv_pos_kernel * self.d_model))
@@ -403,9 +476,9 @@ class AudioTransformerEncoder(nn.Module):
                                                    pdrop=pdrop,
                                                    layers=layers,
                                                    activation=activation,
-                                                   layer_norms_after=False,
+                                                   layer_norms_after=True,
                                                    d_ff=d_ff)
-        # self.ln = nn.LayerNorm(self.d_model)
+        self.ln = nn.LayerNorm(self.d_model)
 
     def forward(self, x, pad_mask=None):
         x = self.extract_features(x, pad_mask)
@@ -414,17 +487,18 @@ class AudioTransformerEncoder(nn.Module):
     def extract_features(self, x, pad_mask=None):
 
         if pad_mask is not None:
-            x[pad_mask] = 0
+            x[~pad_mask] = 0
 
         x_conv = self.pos_conv(x.transpose(1, 2))
         x_conv = x_conv.transpose(1, 2)
 
         # x_conv = self.pos_conv(x)
         x += x_conv
+        x = self.ln(x)
         x = self.dropout(x)
         pad_mask = pad_mask.unsqueeze(1).unsqueeze(1)
 
-        self.transformer((x, pad_mask))
+        x = self.transformer((x, pad_mask))
 
         return x
 
@@ -456,15 +530,16 @@ class Wav2Vec2Encoder(nn.Module):
 
     def forward(self, x, pad_mask=None):
         fx = self.feature_extractor(x)
+        fx = fx.transpose(1, 2)
+
         features = self.layer_norm(fx)
+
         if pad_mask is not None:
             extra = pad_mask.size(1) % features.size(1)
             if extra > 0:
                 pad_mask = pad_mask[:, :-extra]
             pad_mask = pad_mask.view(pad_mask.size(0), features.size(1), -1)
             pad_mask = pad_mask.all(-1)
-            if not pad_mask.sum(-1).byte().all():
-                print("Expected all lengths to be non-zero")
 
         B, T, _ = features.shape
         features = self.proj_to_input(features)
@@ -475,7 +550,7 @@ class Wav2Vec2Encoder(nn.Module):
             time_mask = torch.from_numpy(time_mask).to(x.device)
             features[time_mask] = self.mask_emb
         x = self.encoder(features, pad_mask)
-        return x, pad_mask
+        return x, pad_mask.sum(-1)
 
 
 class Wav2Vec2AcousticModel(nn.Module):
@@ -483,11 +558,15 @@ class Wav2Vec2AcousticModel(nn.Module):
                  dropout_features=0.1):
         super().__init__()
         self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff, dropout_input, dropout_features)
-        self.proj = Dense(d_model, num_labels, activation="log_softmax")
+        self.proj = pytorch_linear(d_model, num_labels)
+        self.freeze = True
 
     def forward(self, x, pad_mask=None):
-        encoded, valid_lengths = self.encoder(x, pad_mask)
-        return self.proj(encoded), valid_lengths
+
+        with torch.no_grad() if self.freeze else contextlib.ExitStack():
+            encoded, valid_lengths = self.encoder(x, pad_mask)
+        encoded = self.proj(encoded)
+        return F.log_softmax(encoded, dim=-1), valid_lengths
 
 
 class Wav2Vec2Model(nn.Module):
