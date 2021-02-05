@@ -112,6 +112,8 @@ def evaluate():
         args.checkpoint = find_latest_checkpoint(args.basedir)
     if args.checkpoint.endswith('.pt'):
         print(load_fairseq_bin(model, args.checkpoint, ctc=True))
+    else:
+        model.load_state_dict(torch.load(args.checkpoint))
 
     model.eval()
     valid_itr = iter(valid_loader)

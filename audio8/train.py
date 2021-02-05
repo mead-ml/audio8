@@ -161,14 +161,20 @@ def train():
         else:
             if os.path.isdir(args.restart_from):
                 args.restart_from, _ = find_latest_checkpoint(args.restart_from)
-            vec = args.restart_from.split("-")
-            model.load_state_dict(torch.load(args.restart_from))
+            try:
+                model.load_state_dict(torch.load(args.restart_from))
+            except:
+                print('Trying to load a8 checkpoint from pretrained wav2vec2 w/o CTC')
+                unmapped = model.encoder.load_state_dict(torch.load(args.restart_from), strict=False)
+                print(unmapped)
             if args.restart_tt:
                 tick_type = args.restart_tt
             else:
+                vec = args.restart_from.split("-")
                 tick_type = vec[-2]
 
             if tick_type == 'step':
+                vec = args.restart_from.split("-")
                 step_num = int(vec[-1].split(".")[0])
                 global_step = step_num
             else:
