@@ -574,7 +574,7 @@ class Wav2Vec2Model(nn.Module):
     is not required, keeping both models simple and focused on a single task
 
     """
-    def __init__(self, conv_features, num_vq_vars=320, start_temp=START_TEMP, end_temp=END_TEMP, temp_decay_factor=TEMP_DECAY_FACTOR,
+    def __init__(self, conv_features=CONV_FEATURES[16], num_vq_vars=320, start_temp=START_TEMP, end_temp=END_TEMP, temp_decay_factor=TEMP_DECAY_FACTOR,
                  num_vq_groups=2, d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, final_dim=256,
                  dropout_input=0.1, dropout_features=0.1):
         super().__init__()
