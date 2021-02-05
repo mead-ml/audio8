@@ -124,9 +124,12 @@ def train():
         else:
             model.load_state_dict(torch.load(args.restart_from))
             vec = args.restart_from.split("-")
-            global_step = int(vec[-1].split(".")[0])
-            logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
-                    args.restart_from, global_step)
+            try:
+                global_step = int(vec[-1].split(".")[0])
+                logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
+                        args.restart_from, global_step)
+            except:
+                logger.warning("No checkpoint step number found.  Starting at global_step=0")
 
     optimizer = OptimizerManager(model, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay)
     logger.info("Model has {:,} parameters".format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
