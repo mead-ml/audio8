@@ -17,7 +17,7 @@ from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, Offset
 from eight_mile.optz import *
 from eight_mile.pytorch.layers import save_checkpoint, init_distributed, sequence_mask, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
-from ctc import CTCLoss, ctc_metrics
+from audio8.ctc import CTCLoss, ctc_metrics, read_vocab_file
 
 logger = logging.getLogger(__file__)
 Offsets.GO = 0
@@ -27,16 +27,6 @@ Offsets.VALUES[Offsets.PAD] = '<pad>'
 Offsets.VALUES[Offsets.EOS] = '</s>'
 Offsets.VALUES[Offsets.UNK] = '<unk>'
 
-
-def read_vocab_file(vocab_file: str):
-    vocab = []
-    for v in Offsets.VALUES:
-        vocab.append(v)
-    with open(vocab_file) as rf:
-        for i, line in enumerate(rf):
-            v = line.split()[0]
-            vocab.append(v)
-        return {v: i for i, v in enumerate(vocab)}
 
 
 
@@ -76,7 +66,7 @@ def train():
     parser.add_argument("--num_heads", type=int, default=12, help="Number of heads")
     parser.add_argument("--num_layers", type=int, default=12, help="Number of layers")
     parser.add_argument("--num_train_workers", type=int, default=4, help="Number train workers")
-    parser.add_argument("--max_sample_len", type=int, default=250_000, help="Max sample length")
+    parser.add_argument("--max_sample_len", type=int, default=325_000, help="Max sample length")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
     parser.add_argument("--lr_scheduler", type=str, default='cosine', help="The type of learning rate decay scheduler")
     parser.add_argument("--lr_decay_steps", type=int, help="decay steps of lr scheduler")
@@ -86,7 +76,7 @@ def train():
     parser.add_argument("--lr", type=float, default=2.0e-5, help="Learning rate")
     parser.add_argument("--clip", type=float, default=25.0, help="Clipping gradient norm")
     parser.add_argument("--weight_decay", type=float, default=1.0e-2, help="Weight decay")
-    parser.add_argument("--restart_tt", type=str, help="Optional param for legacy checkpoints", choices=['step', 'epoch', 'ignore'])
+    parser.add_argument("--restart_tt", type=str, help="Optional param for legacy checkpoints", choices=['step', 'ignore'])
     parser.add_argument("--restart_from", type=str, help="Option allows you to restart from a previous checkpoint")
     parser.add_argument("--warmup_steps", type=int, default=10000, help="Num warmup steps")
     parser.add_argument("--epochs", type=int, default=32, help="Num training epochs")
@@ -135,8 +125,8 @@ def train():
     train_dataset = os.path.join(args.root_dir, args.train_dataset)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
-    train_set = AudioTextLetterDataset(train_dataset, vocab, args.target_tokens_per_batch, 325000, shuffle=True, distribute=args.distributed)
-    valid_set = AudioTextLetterDataset(valid_dataset, vocab, args.target_tokens_per_batch, 325000, distribute=False, shuffle=False)
+    train_set = AudioTextLetterDataset(train_dataset, vocab, args.target_tokens_per_batch, args.max_sample_len, shuffle=True, distribute=args.distributed)
+    valid_set = AudioTextLetterDataset(valid_dataset, vocab, args.target_tokens_per_batch, args.max_sample_len, distribute=False, shuffle=False)
     train_loader = DataLoader(train_set, batch_size=None)  # , num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
 
@@ -157,7 +147,6 @@ def train():
     lr_sched = CompositeLRScheduler(linear_warmup, lr_decay, lr=args.lr)
 
     global_step = 0
-    start_epoch = 0
     if args.restart_from:
 
         if args.restart_from.endswith('.pt'):
@@ -178,14 +167,15 @@ def train():
                 tick_type = args.restart_tt
             else:
                 tick_type = vec[-2]
-            step_num = int(vec[-1].split(".")[0])
-            if tick_type == 'step':
-                global_step = step_num
-            elif tick_type:
-                logger.warning(f"The previous tick was {step_num} but command-line specifies to ignore, setting to 0")
 
-            logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d, epoch=%d",
-                        args.restart_from, global_step, start_epoch + 1)
+            if tick_type == 'step':
+                step_num = int(vec[-1].split(".")[0])
+                global_step = step_num
+            else:
+                logger.warning(f"Setting step number to 0")
+
+            logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
+                        args.restart_from, global_step)
 
     optimizer = OptimizerManager(model, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay)
     logger.info("Model has {:,} parameters".format(sum(p.numel() for p in model.parameters() if p.requires_grad)))

@@ -64,7 +64,7 @@ def evaluate():
     parser.add_argument("--d_k", type=int, default=None, help="Dimension per head.  Use if num_heads=1 to reduce dims")
     parser.add_argument("--num_heads", type=int, default=12, help="Number of heads")
     parser.add_argument("--num_layers", type=int, default=12, help="Number of layers")
-    parser.add_argument("--max_sample_len", type=int, default=250_000, help="Max sample length")
+    parser.add_argument("--max_sample_len", type=int, default=325_000, help="Max sample length")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
     parser.add_argument("--lr_scheduler", type=str, default='cosine', help="The type of learning rate decay scheduler")
     parser.add_argument("--lr_decay_steps", type=int, help="decay steps of lr scheduler")
@@ -100,7 +100,7 @@ def evaluate():
     index2vocab = revlut(vocab)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
-    valid_set = AudioTextLetterDataset(valid_dataset, vocab, args.target_tokens_per_batch, 325000, distribute=False, shuffle=False)
+    valid_set = AudioTextLetterDataset(valid_dataset, vocab, args.target_tokens_per_batch, args.max_sample_len, distribute=False, shuffle=False)
     valid_loader = DataLoader(valid_set, batch_size=None)
     logger.info("Loaded datasets")
 

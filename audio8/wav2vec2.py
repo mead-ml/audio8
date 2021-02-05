@@ -148,10 +148,6 @@ def load_fairseq_bin(w2v: nn.Module, bin_file: str, ctc: bool=False):
 
     num_layers = len(transformer.encoders)
     mapped_keys = convert_keys(num_layers, d, checkpoint_mapping.nested, checkpoint_mapping.flat)
-    #for k in mapped_keys.keys():
-    #    if 'attn' in k:
-    #        t = mapped_keys[k].T
-    #        mapped_keys[k] = t
     unknown_keys = w2v.load_state_dict(mapped_keys, strict=False)
     missing_keys = [key for key in unknown_keys.missing_keys]
     return {'missing': missing_keys, 'unexpected': unknown_keys.unexpected_keys}
@@ -496,7 +492,7 @@ class AudioTransformerEncoder(nn.Module):
         x += x_conv
         x = self.ln(x)
         x = self.dropout(x)
-        if pad_mask:
+        if pad_mask is not None:
             pad_mask = pad_mask.unsqueeze(1).unsqueeze(1)
 
         x = self.transformer((x, pad_mask))
@@ -514,7 +510,7 @@ class Wav2Vec2Encoder(nn.Module):
 
 
     """
-    def __init__(self, conv_features, d_model, num_heads, num_layers, dropout=0.1, d_ff=None, dropout_input=0.1, dropout_features=0.1, do_timestep_masking=False):
+    def __init__(self, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.1, dropout_features=0.1, do_timestep_masking=False):
         super().__init__()
         fx_dsz = conv_features[-1][0]
         self.layer_norm = torch.nn.LayerNorm(fx_dsz)
@@ -555,7 +551,7 @@ class Wav2Vec2Encoder(nn.Module):
 
 
 class Wav2Vec2AcousticModel(nn.Module):
-    def __init__(self, num_labels, conv_features, d_model, num_heads, num_layers, dropout=0.1, d_ff=None, dropout_input=0.1,
+    def __init__(self, num_labels, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.1,
                  dropout_features=0.1):
         super().__init__()
         self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff, dropout_input, dropout_features)
@@ -578,8 +574,8 @@ class Wav2Vec2Model(nn.Module):
     is not required, keeping both models simple and focused on a single task
 
     """
-    def __init__(self, conv_features, num_vq_vars, start_temp, end_temp, temp_decay_factor,
-                 num_vq_groups, d_model, num_heads, num_layers, dropout=0.1, d_ff=None, final_dim=256,
+    def __init__(self, conv_features, num_vq_vars=320, start_temp=START_TEMP, end_temp=END_TEMP, temp_decay_factor=TEMP_DECAY_FACTOR,
+                 num_vq_groups=2, d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, final_dim=256,
                  dropout_input=0.1, dropout_features=0.1):
         super().__init__()
         fx_dsz = conv_features[-1][0]
