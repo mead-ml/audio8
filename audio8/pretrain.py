@@ -35,12 +35,11 @@ def train():
     parser.add_argument("--sr", type=int, choices=[8, 16], default=16)
     parser.add_argument("--d_model", type=int, default=768, help="Model dimension (and embedding dsz)")
     parser.add_argument("--d_ff", type=int, default=3072, help="FFN dimension")
-    parser.add_argument("--d_k", type=int, default=None, help="Dimension per head.  Use if num_heads=1 to reduce dims")
     parser.add_argument("--num_heads", type=int, default=12, help="Number of heads")
     parser.add_argument("--num_layers", type=int, default=12, help="Number of layers")
     parser.add_argument("--num_train_workers", type=int, default=4, help="Number train workers")
     parser.add_argument("--tokens_per_batch", type=int, default=1_400_000, help="Number of tokens per batch")
-    parser.add_argument("--max_sample_len", type=int, default=250_000, help="Max sample length")
+    parser.add_argument("--max_sample_len", type=int, default=325_000, help="Max sample length")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
     parser.add_argument("--lr_scheduler", type=str, default='cosine', help="The type of learning rate decay scheduler")
     parser.add_argument("--lr_decay_steps", type=int, help="decay steps of lr scheduler")
@@ -125,9 +124,12 @@ def train():
         else:
             model.load_state_dict(torch.load(args.restart_from))
             vec = args.restart_from.split("-")
-            global_step = int(vec[-1].split(".")[0])
-            logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
-                    args.restart_from, global_step)
+            try:
+                global_step = int(vec[-1].split(".")[0])
+                logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
+                        args.restart_from, global_step)
+            except:
+                logger.warning("No checkpoint step number found.  Starting at global_step=0")
 
     optimizer = OptimizerManager(model, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay)
     logger.info("Model has {:,} parameters".format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
