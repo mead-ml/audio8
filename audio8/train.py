@@ -1,9 +1,6 @@
 """Training using 8-mile API
 
 """
-from pynvml import *
-
-nvmlInit()
 import logging
 import time
 import numpy as np
