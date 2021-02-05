@@ -21,18 +21,10 @@ class About(object):
     AUTHOR = 'dpressel'
     VERSION = get_version('audio8/version.py')
     EMAIL = "{}@gmail.com".format(AUTHOR)
-    URL = "https://www.github.com/{}/{}".format(AUTHOR, NAME)
+    URL = f"https://www.github.com/mead-ml/{NAME}"
     DOWNLOAD_URL = "{}/archive/{}.tar.gz".format(URL, VERSION)
     DOC_URL = "{}/tree/master/".format(URL)
     DOC_NAME = 'docs/{}.md'.format(NAME)
-
-def get_configs(config_loc):
-    """include everything in config_loc as package data."""
-    configs = []
-    for f in os.listdir(config_loc):
-        configs.append(os.path.join(config_loc, f))
-    write_manifest(configs)
-    return configs
 
 def write_manifest(lines):
     with open("MANIFEST.in", "w") as f:
@@ -73,14 +65,14 @@ def main():
         download_url=About.DOWNLOAD_URL,
         packages=find_packages(exclude=['tests', 'api-examples']),
         package_data={
-            'mead': get_configs('mead/config'),
         },
-        include_package_data=True,
+        include_package_data=False,
         install_requires=[
             'numpy',
             'six',
             'soundfile',
-            'mead-layers=={}'.format(About.VERSION),
+            'editdistance',
+            'mead-layers',
         ],
         extras_require={
             'test': ['pytest', 'mock', 'contextdecorator', 'pytest-forked', 'onnxruntime'],
