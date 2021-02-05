@@ -496,7 +496,8 @@ class AudioTransformerEncoder(nn.Module):
         x += x_conv
         x = self.ln(x)
         x = self.dropout(x)
-        pad_mask = pad_mask.unsqueeze(1).unsqueeze(1)
+        if pad_mask:
+            pad_mask = pad_mask.unsqueeze(1).unsqueeze(1)
 
         x = self.transformer((x, pad_mask))
 
@@ -602,6 +603,7 @@ class Wav2Vec2Model(nn.Module):
 
     def forward(self, x):
         fx = self.feature_extractor(x)
+        fx = fx.transpose(1, 2)
         features = self.layer_norm(fx)
         unmasked_features = features.clone()
         features = self.proj_to_input(features)
