@@ -1,6 +1,6 @@
-# mead-audio
+# audio8
 
-Deep ASR models using 8-mile
+API examples using 8-mile for audio
 
 ## Implementation
 

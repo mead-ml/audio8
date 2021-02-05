@@ -73,12 +73,7 @@ def batch_by_size(
 
 
 class AudioTextLetterDataset(IterableDataset):
-    """In this dataset, we get in a couple of things
-    1. 2 TSV files that contain all of the training and valid samples
-    2. 2 LTR files that contain all of the grapheme transcriptions, presumed in the same order as the input
 
-    I am going to assume that the LTR files live in the same directory as the TSV files for now
-    """
     def __init__(self, tsv_file, vocab, target_tokens_per_batch, max_src_length, distribute=True, shuffle=True, max_dst_length=1200):
         super().__init__()
         self.min_src_length = 0  # TODO: remove?
@@ -204,13 +199,9 @@ class AudioTextLetterDataset(IterableDataset):
         wav = wav.astype(np.float32)
         return wav
 
-class BucketingAudioTextLetterDataset(IterableDataset):
-    """In this dataset, we get in a couple of things
-    1. 2 TSV files that contain all of the training and valid samples
-    2. 2 LTR files that contain all of the grapheme transcriptions, presumed in the same order as the input
 
-    I am going to assume that the LTR files live in the same directory as the TSV files for now
-    """
+class BucketingAudioTextLetterDataset(IterableDataset):
+
     def __init__(self, buckets, tsv_file, vocab, target_tokens_per_batch, distribute=True, shuffle=True, max_dst_length=120):
         super().__init__()
         self.bucket_lengths = buckets

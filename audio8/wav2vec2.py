@@ -16,10 +16,7 @@ TEMP_DECAY_FACTOR = 0.999995
 XE_WGT = 0.1
 DIVERSITY_WGT = 10
 
-
-
-
-
+# Transfer fairseq keys to audio8
 W2V_CTC_NESTED_MAP = {
     'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.k_proj.weight':     'encoder.encoder.transformer.encoders.{}.self_attn.w_K.layer.weight',
     'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.k_proj.bias':       'encoder.encoder.transformer.encoders.{}.self_attn.w_K.layer.bias',
@@ -230,8 +227,10 @@ class Wav2Vec2Loss(nn.Module):
         cross_entropy = XE_WGT * xe_loss
         return cross_entropy + diversity
 
+
 def create_loss(n_vars, n_negatives):
     return Wav2Vec2Loss(n_vars, n_negatives)
+
 
 class ConvFeatureExtractionModel(nn.Module):
     def __init__(

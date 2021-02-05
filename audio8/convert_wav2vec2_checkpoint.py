@@ -1,4 +1,4 @@
-from audio8.wav2vec2 import Wav2Vec2Model, Wav2Vec2AcousticModel, load_fairseq_bin, CONV_FEATURES
+from audio8.wav2vec2 import Wav2Vec2Model, Wav2Vec2AcousticModel, load_fairseq_bin
 import argparse
 from eight_mile.utils import str2bool
 import os
