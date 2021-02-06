@@ -79,7 +79,6 @@ def train():
     parser.add_argument("--restart_tt", type=str, help="Optional param for legacy checkpoints", choices=['step', 'ignore'])
     parser.add_argument("--restart_from", type=str, help="Option allows you to restart from a previous checkpoint")
     parser.add_argument("--warmup_steps", type=int, default=10000, help="Num warmup steps")
-    parser.add_argument("--epochs", type=int, default=32, help="Num training epochs")
     parser.add_argument("--saves_per_epoch", type=int, default=10, help="The number of saves per epoch")
     parser.add_argument("--model_type", default="wav2vec2")
     parser.add_argument("--unfreeze_enc_after_step", default=10_000)
@@ -202,7 +201,6 @@ def train():
     steps = global_step
 
     train_itr = iter(train_loader)
-    start_of_run = 0
     avg_loss = Average('average_train_loss')
     step_time = Average('average_step_time')
     batch_sizes = Average('batch_size')

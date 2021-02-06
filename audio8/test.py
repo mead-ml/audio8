@@ -55,7 +55,7 @@ def evaluate():
     parser.add_argument("--root_dir")
     parser.add_argument("--checkpoint")
     parser.add_argument("--valid_dataset", type=str, help='Dataset (by name), e.g. dev-other')
-    parser.add_argument("--dict_file", type=str, help="Dictionary file")
+    parser.add_argument("--dict_file", type=str, help="Dictionary file", default='dict.ltr.txt')
     parser.add_argument("--dataset_key", default="LibriSpeech",
                         help="dataset key for basedir")
     parser.add_argument("--sr", type=int, choices=[8, 16], default=16)
@@ -65,15 +65,6 @@ def evaluate():
     parser.add_argument("--num_heads", type=int, default=12, help="Number of heads")
     parser.add_argument("--num_layers", type=int, default=12, help="Number of layers")
     parser.add_argument("--max_sample_len", type=int, default=325_000, help="Max sample length")
-    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
-    parser.add_argument("--lr_scheduler", type=str, default='cosine', help="The type of learning rate decay scheduler")
-    parser.add_argument("--lr_decay_steps", type=int, help="decay steps of lr scheduler")
-    parser.add_argument("--lr_decay_rate", type=float, help="decay rate of lr scheduler")
-    parser.add_argument("--lr_alpha", type=float, default=0., help="parameter alpha for cosine decay scheduler")
-    parser.add_argument("--optim", default="adamw", type=str, help="Optimizer to use (defaults to adamw)")
-    parser.add_argument("--lr", type=float, default=4.0e-4, help="Learning rate")
-    parser.add_argument("--clip", type=float, default=1.0, help="Clipping gradient norm")
-    parser.add_argument("--weight_decay", type=float, default=1.0e-2, help="Weight decay")
     parser.add_argument("--restart_tt", type=str, help="Optional param for legacy checkpoints", choices=['step', 'epoch', 'ignore'])
     parser.add_argument("--restart_from", type=str, help="Option allows you to restart from a previous checkpoint")
     parser.add_argument("--model_type", default="wav2vec2")
@@ -86,16 +77,12 @@ def evaluate():
                         help="Device (cuda or cpu)")
     parser.add_argument("--vocab_file", help="Vocab for output decoding")
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
-    parser.add_argument("--local_rank",
-                        type=int,
-                        default=-1,
-                        help="Local rank for distributed training (-1 means use the environment variables to find)")
 
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
 
-    vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, 'dict.ltr.txt')
+    vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, args.dict_file)
     vocab = read_vocab_file(vocab_file)
     index2vocab = revlut(vocab)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
@@ -106,7 +93,7 @@ def evaluate():
 
     num_labels = len(vocab)
     model = create_acoustic_model(num_labels, args.sr, args.d_model, args.num_heads, args.num_layers,
-                                  args.dropout, args.d_ff).to(args.device)
+                                  0.0, args.d_ff).to(args.device)
 
     if not args.checkpoint:
         args.checkpoint = find_latest_checkpoint(args.basedir)
