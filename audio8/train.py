@@ -192,7 +192,7 @@ def train():
         # the selection of gpus based on rank, it would need to select multiple ids
         # based on rank, here we select only a single gpu and use it for input and
         # output.
-        model = DistributedDataParallel(model, device_ids=[args.device], output_device=args.device)
+        model = DistributedDataParallel(model, device_ids=[args.device], output_device=args.device, find_unused_parameters=True)
         _model = model.module
         logger.info("Model located on %s", args.device)
     else:
