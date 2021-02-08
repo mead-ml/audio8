@@ -4,7 +4,7 @@
 
 import os
 from argparse import ArgumentParser
-from audio8.data import AudioTextLetterDataset
+from audio8.data import AudioTextLetterDataset, TextVectorizer
 from audio8.wav2vec2 import create_acoustic_model, load_fairseq_bin, W2V_CTC_MAP
 from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Offsets, revlut
@@ -38,7 +38,8 @@ def run_step(index2vocab, model, batch, device, verbose=False):
         inputs, input_lengths, targets, target_lengths = batch
         inputs = inputs.to(device)
         pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device)
-        logits, output_lengths = model(inputs, pad_mask)
+        logits, _ = model(inputs, pad_mask)
+        #output_lengths = pad_mask.sum(-1)
 
         if verbose:
             logits = torch.argmax(logits[0], -1).tolist()
@@ -84,10 +85,11 @@ def evaluate():
 
     vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, args.dict_file)
     vocab = read_vocab_file(vocab_file)
+    vec = TextVectorizer(vocab)
     index2vocab = revlut(vocab)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
-    valid_set = AudioTextLetterDataset(valid_dataset, vocab, args.target_tokens_per_batch, args.max_sample_len, distribute=False, shuffle=False)
+    valid_set = AudioTextLetterDataset(valid_dataset, vec, args.target_tokens_per_batch, args.max_sample_len, distribute=False, shuffle=False)
     valid_loader = DataLoader(valid_set, batch_size=None)
     logger.info("Loaded datasets")
 

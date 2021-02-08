@@ -15,7 +15,35 @@ import soundfile as sf
 from torch.utils.data import DataLoader, IterableDataset
 from eight_mile.utils import Offsets
 from eight_mile.pytorch.optz import *
+from baseline.vectorizers import BPEVectorizer1D
 logger = logging.getLogger(__file__)
+
+
+class TextVectorizer:
+    def __init__(self, vocab: Dict[str, int]):
+        self.vocab = vocab
+
+    def run(self, text) -> np.ndarray:
+        """
+
+        :param text:
+        :return:
+        """
+        return np.array([self.vocab[w] for w in text], dtype=np.int)
+
+class BPEVectorizer:
+    def __init__(self, model_file, vocab_file, emit_begin_tok=[], emit_end_tok=[]):
+        self.internal = BPEVectorizer1D(model_file=model_file, vocab_file=vocab_file,
+                              emit_begin_tok=emit_begin_tok, emit_end_tok=emit_end_tok, transform_fn=str.lower)
+
+    @property
+    def vocab(self):
+        return self.internal.vocab
+
+    def run(self, text) -> np.ndarray:
+        z = [x for x in self.internal._next_element(text, self.vocab)]
+        return np.array(z, dtype=np.int)
+
 
 def pad_init(shp, dtype=np.int32):
     return np.zeros(shp, dtype=dtype)
@@ -74,13 +102,17 @@ def batch_by_size(
 
 class AudioTextLetterDataset(IterableDataset):
 
-    def __init__(self, tsv_file, vocab, target_tokens_per_batch, max_src_length, distribute=True, shuffle=True, max_dst_length=1200):
+    TGT_LETTER = 'ltr'
+    TGT_BPE = 'bpe'
+    TGT_WRD = 'wrd'
+
+    def __init__(self, tsv_file, vec, target_tokens_per_batch, max_src_length, distribute=True, shuffle=True, max_dst_length=1200, tgt_type=TGT_LETTER):
         super().__init__()
         self.min_src_length = 0  # TODO: remove?
         self.max_src_length = max_src_length
         self.max_dst_length = max_dst_length
-
-        self.w2i = vocab
+        self.tgt_type = tgt_type
+        self.vec = vec
         self.tsv_file = tsv_file
         self.rank = 0
         self.world_size = 1
@@ -103,7 +135,7 @@ class AudioTextLetterDataset(IterableDataset):
         self.tokens = []
         with open(tsv_file, "r") as f:
             self.directory = f.readline().strip()
-            transcription_file = tsv_file.replace('tsv', 'ltr')
+            transcription_file = tsv_file.replace('tsv', self.tgt_type)
             with open(transcription_file) as rf:
                 for i, (audio, transcription) in enumerate(zip(f, rf)):
                     basename, x_length = audio.split('\t')
@@ -113,8 +145,7 @@ class AudioTextLetterDataset(IterableDataset):
                     if x_length < self.min_src_length or x_length > self.max_src_length:
                         continue
                     text = self._read_transcription(transcription)
-                    tokens = np.array([self.w2i[t] for t in text])
-
+                    tokens = self.vec.run(text)
                     self.files.append(path)
                     self.sizes.append(x_length)
                     self.tokens.append(tokens)
@@ -126,7 +157,7 @@ class AudioTextLetterDataset(IterableDataset):
         self.batches = batch_by_size(
             indices, self.sizes, self.max_elems_per_batch, max_sentences=128,
         )
-        print(torch.mean(torch.tensor([len(b) for b in self.batches]).float()).item())
+        #print(torch.mean(torch.tensor([len(b) for b in self.batches]).float()).item())
 
 
     def _get_worker_info(self):
@@ -165,10 +196,10 @@ class AudioTextLetterDataset(IterableDataset):
                 random.shuffle(read_order)
             for rd in read_order:
                 batch = self.batches[rd]
-                zp_text = np.ones((len(batch), self.max_dst_length), dtype=np.int32)
+                zp_text = np.ones((len(batch), self.max_dst_length), dtype=np.long)
                 zp_audio = np.zeros((len(batch), self.max_src_length), dtype=np.float32)
                 audio_lengths = np.zeros(len(batch), dtype=np.int32)
-                text_lengths = np.zeros(len(batch), dtype=np.int32)
+                text_lengths = np.zeros(len(batch), dtype=np.long)
                 for i, idx in enumerate(batch):
                     pth = self.files[idx]
                     tokens = self.tokens[idx]
@@ -290,7 +321,7 @@ class BucketingAudioTextLetterDataset(IterableDataset):
                 for (file, x_length, y_length, tokens) in self.files[bucket]:
 
                     #text = np.array([self.w2i[t] for t in tokens])
-                    zp_text = pad_init(self.max_dst_length)
+                    zp_text = pad_init(self.max_dst_length, dtype=np.long)
                     l = min(self.max_dst_length, len(tokens))
                     zp_text[:l] = tokens[:l]
                     text_lengths.append(l)

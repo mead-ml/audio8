@@ -9,7 +9,7 @@ import os
 from argparse import ArgumentParser
 import torch.nn as nn
 import random
-from audio8.data import AudioTextLetterDataset
+from audio8.data import AudioTextLetterDataset, TextVectorizer
 from audio8.wav2vec2 import create_acoustic_model, load_fairseq_bin
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
@@ -35,7 +35,8 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
     targets = targets.to(device)
-    logits, output_lengths = model(inputs, pad_mask)
+    logits, pad_mask = model(inputs, pad_mask)
+    output_lengths = pad_mask.sum(-1)
     loss = loss_function(logits.transpose(1, 0), output_lengths, targets, target_lengths)
     logits = logits.detach().cpu()
     metrics = {}
@@ -55,7 +56,7 @@ def train():
     parser.add_argument("--root_dir")
     parser.add_argument("--train_dataset", type=str, help='Dataset (by name), e.g. train-clean-360')
     parser.add_argument("--valid_dataset", type=str, help='Dataset (by name), e.g. dev-other')
-    parser.add_argument("--dict_file", type=str, help="Dictionary file")
+    parser.add_argument("--dict_file", type=str, help="Dictionary file", default='dict.ltr.txt')
     parser.add_argument("--dataset_key", default="LibriSpeech",
                         help="dataset key for basedir")
     parser.add_argument("--grad_accum", type=int, default=1)
@@ -118,14 +119,15 @@ def train():
         args.device, updated_local_rank = init_distributed(args.local_rank)
         args.local_rank = updated_local_rank
 
-    vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, 'dict.ltr.txt')
+    vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, args.dict_file)
     vocab = read_vocab_file(vocab_file)
+    vec = TextVectorizer(vocab)
     index2vocab = revlut(vocab)
     train_dataset = os.path.join(args.root_dir, args.train_dataset)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
-    train_set = AudioTextLetterDataset(train_dataset, vocab, args.target_tokens_per_batch, args.max_sample_len, shuffle=True, distribute=args.distributed)
-    valid_set = AudioTextLetterDataset(valid_dataset, vocab, args.target_tokens_per_batch, args.max_sample_len, distribute=False, shuffle=False)
+    train_set = AudioTextLetterDataset(train_dataset, vec, args.target_tokens_per_batch, args.max_sample_len, shuffle=True, distribute=args.distributed)
+    valid_set = AudioTextLetterDataset(valid_dataset, vec, args.target_tokens_per_batch, args.max_sample_len, distribute=False, shuffle=False)
     train_loader = DataLoader(train_set, batch_size=None)  # , num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
 
