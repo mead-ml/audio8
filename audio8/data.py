@@ -15,6 +15,7 @@ import soundfile as sf
 from torch.utils.data import DataLoader, IterableDataset
 from eight_mile.utils import Offsets
 from eight_mile.pytorch.optz import *
+from baseline.vectorizers import BPEVectorizer1D
 logger = logging.getLogger(__file__)
 
 
@@ -29,6 +30,20 @@ class TextVectorizer:
         :return:
         """
         return np.array([self.vocab[w] for w in text], dtype=np.int)
+
+class BPEVectorizer:
+    def __init__(self, model_file, vocab_file, emit_begin_tok=[], emit_end_tok=[]):
+        self.internal = BPEVectorizer1D(model_file=model_file, vocab_file=vocab_file,
+                              emit_begin_tok=emit_begin_tok, emit_end_tok=emit_end_tok, transform_fn=str.lower)
+
+    @property
+    def vocab(self):
+        return self.internal.vocab
+
+    def run(self, text) -> np.ndarray:
+        z = [x for x in self.internal._next_element(text, self.vocab)]
+        return np.array(z, dtype=np.int)
+
 
 def pad_init(shp, dtype=np.int32):
     return np.zeros(shp, dtype=dtype)
@@ -181,10 +196,10 @@ class AudioTextLetterDataset(IterableDataset):
                 random.shuffle(read_order)
             for rd in read_order:
                 batch = self.batches[rd]
-                zp_text = np.ones((len(batch), self.max_dst_length), dtype=np.int32)
+                zp_text = np.ones((len(batch), self.max_dst_length), dtype=np.long)
                 zp_audio = np.zeros((len(batch), self.max_src_length), dtype=np.float32)
                 audio_lengths = np.zeros(len(batch), dtype=np.int32)
-                text_lengths = np.zeros(len(batch), dtype=np.int32)
+                text_lengths = np.zeros(len(batch), dtype=np.long)
                 for i, idx in enumerate(batch):
                     pth = self.files[idx]
                     tokens = self.tokens[idx]
@@ -306,7 +321,7 @@ class BucketingAudioTextLetterDataset(IterableDataset):
                 for (file, x_length, y_length, tokens) in self.files[bucket]:
 
                     #text = np.array([self.w2i[t] for t in tokens])
-                    zp_text = pad_init(self.max_dst_length)
+                    zp_text = pad_init(self.max_dst_length, dtype=np.long)
                     l = min(self.max_dst_length, len(tokens))
                     zp_text[:l] = tokens[:l]
                     text_lengths.append(l)

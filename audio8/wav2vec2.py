@@ -16,6 +16,7 @@ TEMP_DECAY_FACTOR = 0.999995
 XE_WGT = 0.1
 DIVERSITY_WGT = 10
 
+
 # Transfer fairseq keys to audio8
 W2V_CTC_NESTED_MAP = {
     'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.k_proj.weight':     'encoder.encoder.transformer.encoders.{}.self_attn.w_K.layer.weight',
@@ -523,6 +524,7 @@ class Wav2Vec2Encoder(nn.Module):
             torch.FloatTensor(d_model).uniform_()
         )
         self.do_timestep_masking = do_timestep_masking
+        self.output_dim = d_model
 
     def forward(self, x, pad_mask=None):
         fx = self.feature_extractor(x)
@@ -570,18 +572,22 @@ class Wav2Vec2PooledEncoder(nn.Module):
                  dropout_features=0.1, reduction_type='SHA', reduction_d_k=64):
         super().__init__()
         self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff, dropout_input, dropout_features)
+        self.output_dim = self.encoder.output_dim
         if reduction_type == "2HA":
             self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k), nn.Linear(2*d_model, d_model))
         elif reduction_type == "SHA":
             self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k)
         else:
             raise Exception("Unknown exception type")
+        self.freeze = True
 
-    def forward(self, x, pad_mask=None):
+    def forward(self, x):
 
+        (x, pad_mask) = x
         with torch.no_grad() if self.freeze else contextlib.ExitStack():
-            encoded, valid_lengths = self.encoder(x, pad_mask)
-        self.reduction_layer((encoded, valid_lengths))
+            encoded, pad_mask = self.encoder(x, pad_mask)
+        if pad_mask is not None:
+            pad_mask = pad_mask.unsqueeze(1).unsqueeze(1)
         encoded_query = self.reduction_layer((encoded, encoded, encoded, pad_mask))
         return encoded_query
 
