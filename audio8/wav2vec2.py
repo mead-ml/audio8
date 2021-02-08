@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import math
-from eight_mile.pytorch.layers import pytorch_conv1d, pytorch_linear, Conv1DSame, TransformerEncoderStack, Dense
+from eight_mile.pytorch.layers import pytorch_conv1d, pytorch_linear, Conv1DSame, TransformerEncoderStack, Dense, TwoHeadConcat, SingleHeadReduction, sequence_mask_mxlen
 import contextlib
 from collections import namedtuple
 CONV_FEATURES = {16: [(512, 10, 5), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 2, 2), (512, 2, 2)],
@@ -546,7 +546,7 @@ class Wav2Vec2Encoder(nn.Module):
             time_mask = torch.from_numpy(time_mask).to(x.device)
             features[time_mask] = self.mask_emb
         x = self.encoder(features, pad_mask)
-        return x, pad_mask.sum(-1)
+        return x, pad_mask
 
 
 class Wav2Vec2AcousticModel(nn.Module):
@@ -560,9 +560,30 @@ class Wav2Vec2AcousticModel(nn.Module):
     def forward(self, x, pad_mask=None):
 
         with torch.no_grad() if self.freeze else contextlib.ExitStack():
-            encoded, valid_lengths = self.encoder(x, pad_mask)
+            encoded, pad_mask = self.encoder(x, pad_mask)
         encoded = self.proj(encoded)
-        return F.log_softmax(encoded, dim=-1), valid_lengths
+        return F.log_softmax(encoded, dim=-1), pad_mask
+
+
+class Wav2Vec2PooledEncoder(nn.Module):
+    def __init__(self, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.1,
+                 dropout_features=0.1, reduction_type='SHA', reduction_d_k=64):
+        super().__init__()
+        self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff, dropout_input, dropout_features)
+        if reduction_type == "2HA":
+            self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k), nn.Linear(2*d_model, d_model))
+        elif reduction_type == "SHA":
+            self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k)
+        else:
+            raise Exception("Unknown exception type")
+
+    def forward(self, x, pad_mask=None):
+
+        with torch.no_grad() if self.freeze else contextlib.ExitStack():
+            encoded, valid_lengths = self.encoder(x, pad_mask)
+        self.reduction_layer((encoded, valid_lengths))
+        encoded_query = self.reduction_layer((encoded, encoded, encoded, pad_mask))
+        return encoded_query
 
 
 class Wav2Vec2Model(nn.Module):

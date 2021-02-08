@@ -17,6 +17,19 @@ from eight_mile.utils import Offsets
 from eight_mile.pytorch.optz import *
 logger = logging.getLogger(__file__)
 
+
+class TextVectorizer:
+    def __init__(self, vocab: Dict[str, int]):
+        self.vocab = vocab
+
+    def run(self, text) -> np.ndarray:
+        """
+
+        :param text:
+        :return:
+        """
+        return np.array([self.vocab[w] for w in text], dtype=np.int)
+
 def pad_init(shp, dtype=np.int32):
     return np.zeros(shp, dtype=dtype)
 
@@ -74,13 +87,17 @@ def batch_by_size(
 
 class AudioTextLetterDataset(IterableDataset):
 
-    def __init__(self, tsv_file, vocab, target_tokens_per_batch, max_src_length, distribute=True, shuffle=True, max_dst_length=1200):
+    TGT_LETTER = 'ltr'
+    TGT_BPE = 'bpe'
+    TGT_WRD = 'wrd'
+
+    def __init__(self, tsv_file, vec, target_tokens_per_batch, max_src_length, distribute=True, shuffle=True, max_dst_length=1200, tgt_type=TGT_LETTER):
         super().__init__()
         self.min_src_length = 0  # TODO: remove?
         self.max_src_length = max_src_length
         self.max_dst_length = max_dst_length
-
-        self.w2i = vocab
+        self.tgt_type = tgt_type
+        self.vec = vec
         self.tsv_file = tsv_file
         self.rank = 0
         self.world_size = 1
@@ -103,7 +120,7 @@ class AudioTextLetterDataset(IterableDataset):
         self.tokens = []
         with open(tsv_file, "r") as f:
             self.directory = f.readline().strip()
-            transcription_file = tsv_file.replace('tsv', 'ltr')
+            transcription_file = tsv_file.replace('tsv', self.tgt_type)
             with open(transcription_file) as rf:
                 for i, (audio, transcription) in enumerate(zip(f, rf)):
                     basename, x_length = audio.split('\t')
@@ -113,8 +130,7 @@ class AudioTextLetterDataset(IterableDataset):
                     if x_length < self.min_src_length or x_length > self.max_src_length:
                         continue
                     text = self._read_transcription(transcription)
-                    tokens = np.array([self.w2i[t] for t in text])
-
+                    tokens = self.vec.run(text)
                     self.files.append(path)
                     self.sizes.append(x_length)
                     self.tokens.append(tokens)
@@ -126,7 +142,7 @@ class AudioTextLetterDataset(IterableDataset):
         self.batches = batch_by_size(
             indices, self.sizes, self.max_elems_per_batch, max_sentences=128,
         )
-        print(torch.mean(torch.tensor([len(b) for b in self.batches]).float()).item())
+        #print(torch.mean(torch.tensor([len(b) for b in self.batches]).float()).item())
 
 
     def _get_worker_info(self):
