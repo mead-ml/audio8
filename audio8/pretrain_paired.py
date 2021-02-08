@@ -212,39 +212,29 @@ def train():
     global_step = 0
     if args.restart_from:
 
-        if args.restart_from.endswith('.pt'):
-            # The pretrained fairseq checkpoints differ depending on whether they are pretrained wav2vec2
-            # or wav2vec2-ctc.  First, we try loading as pretrained wav2vec2, then back off to ctc
-            try:
-                unmapped = load_fairseq_bin(model.encoder, args.restart_from)
-            except:
-                unmapped = load_fairseq_bin(model, args.restart_from, ctc=True)
+        if os.path.isdir(args.restart_from):
+            args.restart_from, _ = find_latest_checkpoint(args.restart_from)
+        try:
+            model.load_state_dict(torch.load(args.restart_from))
+        except:
+            print('Trying to load a8 checkpoint from pretrained wav2vec2 w/o CTC')
+            unmapped = model.encoder_1.load_state_dict(torch.load(args.restart_from), strict=False)
             print(unmapped)
-            args.tick_type = None
+        if args.restart_tt:
+            tick_type = args.restart_tt
         else:
-            if os.path.isdir(args.restart_from):
-                args.restart_from, _ = find_latest_checkpoint(args.restart_from)
-            try:
-                model.load_state_dict(torch.load(args.restart_from))
-            except:
-                print('Trying to load a8 checkpoint from pretrained wav2vec2 w/o CTC')
-                unmapped = model.encoder_1.load_state_dict(torch.load(args.restart_from), strict=False)
-                print(unmapped)
-            if args.restart_tt:
-                tick_type = args.restart_tt
-            else:
-                vec = args.restart_from.split("-")
-                tick_type = vec[-2]
+            vec = args.restart_from.split("-")
+            tick_type = vec[-2]
 
-            if tick_type == 'step':
-                vec = args.restart_from.split("-")
-                step_num = int(vec[-1].split(".")[0])
-                global_step = step_num
-            else:
-                logger.warning(f"Setting step number to 0")
+        if tick_type == 'step':
+            vec = args.restart_from.split("-")
+            step_num = int(vec[-1].split(".")[0])
+            global_step = step_num
+        else:
+            logger.warning(f"Setting step number to 0")
 
-            logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
-                        args.restart_from, global_step)
+        logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
+                    args.restart_from, global_step)
 
     optimizer = OptimizerManager(model, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay)
     logger.info("Model has {:,} parameters".format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
