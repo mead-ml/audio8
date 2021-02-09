@@ -14,6 +14,7 @@ from audio8.text import BPEVectorizer, TextTransformerPooledEncoder
 from audio8.wav2vec2 import Wav2Vec2PooledEncoder, load_fairseq_bin, CONV_FEATURES
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
+from eight_mile.pytorch.serialize import load_tlm_npz
 from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, revlut
 from baseline.pytorch.embeddings import *
 import baseline.embeddings
@@ -76,7 +77,7 @@ def train():
     parser.add_argument("--text_pooling", type=str, choices=['2HA', 'SHA'], default='SHA')
     parser.add_argument("--text_begin_tok", type=str, default="<GO>")
     parser.add_argument("--text_end_tok", type=str, default="<EOS>")
-
+    parser.add_argument("--text_rpr_k", type=int, default=8, help="Relative Attention Representation length")
     parser.add_argument("--output_dim", type=int, default=256)
     parser.add_argument("--nctx", type=int, default=256)
     parser.add_argument("--num_train_workers", type=int, default=4, help="Number train workers")
@@ -110,6 +111,7 @@ def train():
                         help="Are we doing distributed training?")
     parser.add_argument("--vocab_file", help="Vocab for output decoding")
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
+    parser.add_argument("--warmstart_text", help="Restore text encoder from an existing checkpoint")
     parser.add_argument("--local_rank",
                         type=int,
                         default=-1,
@@ -189,6 +191,11 @@ def train():
 
         logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
                     args.restart_from, global_step)
+
+    if args.warmstart_text:
+        # Assume for now that its going to be an NPZ file
+        logger.info("Warm-starting text encoder from NPZ file")
+        load_tlm_npz(model.encoder_2, args.warmstart_text)
 
     optimizer = OptimizerManager(model, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay)
     logger.info("Model has {:,} parameters".format(sum(p.numel() for p in model.parameters() if p.requires_grad)))

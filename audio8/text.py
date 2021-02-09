@@ -59,10 +59,10 @@ class TextTransformerPooledEncoder(nn.Module):
                  rpr_value_on=False):
         super().__init__()
         self.embeddings = EmbeddingsStack({'x': embeddings})
-        self.encoder = TransformerEncoderStack(num_heads=num_heads, d_model=d_model,
-                                               pdrop=dropout, layers=num_layers, activation='gelu', d_ff=d_ff,
-                                               ffn_pdrop=ffn_pdrop,
-                                               d_k=d_k, rpr_k=rpr_k, windowed_ra=windowed_ra, rpr_value_on=rpr_value_on)
+        self.transformer = TransformerEncoderStack(num_heads=num_heads, d_model=d_model,
+                                                   pdrop=dropout, layers=num_layers, activation='gelu', d_ff=d_ff,
+                                                   ffn_pdrop=ffn_pdrop,
+                                                   d_k=d_k, rpr_k=rpr_k, windowed_ra=windowed_ra, rpr_value_on=rpr_value_on)
         self.output_dim = d_model
         if reduction_type == "2HA":
             self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k),
@@ -78,7 +78,7 @@ class TextTransformerPooledEncoder(nn.Module):
         att_mask = sequence_mask_mxlen(query_lengths, query.shape[1]).to(query.device)
         embedded = self.embeddings({'x': query})
         att_mask = att_mask.unsqueeze(1).unsqueeze(1)
-        encoded_query = self.encoder((embedded, att_mask))
+        encoded_query = self.transformer((embedded, att_mask))
 
         encoded_query = self.reduction_layer((encoded_query, encoded_query, encoded_query, att_mask))
         return encoded_query
