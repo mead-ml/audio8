@@ -2,7 +2,7 @@ import numpy as np
 from typing import Dict
 from baseline.vectorizers import BPEVectorizer1D
 from eight_mile.utils import Offsets
-from eight_mile.pytorch.layers import EmbeddingsStack, TransformerEncoderStack, SingleHeadReduction, TwoHeadConcat, sequence_mask_mxlen
+from eight_mile.pytorch.layers import EmbeddingsStack, TransformerEncoderStack, SingleHeadReduction, TwoHeadConcat, sequence_mask_mxlen, MeanPool1D, MaxPool1D
 import torch.nn as nn
 
 def read_vocab_file(vocab_file: str):
@@ -41,6 +41,19 @@ class BPEVectorizer:
         z = [x for x in self.internal._next_element(text, self.vocab)]
         return np.array(z, dtype=np.int)
 
+
+class TextBoWPooledEncoder(nn.Module):
+    def __init__(self, embeddings, reduction_type='mean'):
+        super().__init__()
+        self.embeddings = EmbeddingsStack({'x': embeddings})
+        self.output_dim = self.embeddings.output_dim
+
+        self.pooler = MaxPool1D(self.output_dim) if reduction_type == 'max' else MeanPool1D(self.output_dim)
+
+    def forward(self, query):
+        (query, query_length) = query
+        embedded = self.embeddings({'x': query})
+        return self.pooler((embedded, query_length))
 
 class TextTransformerPooledEncoder(nn.Module):
     def __init__(self,

@@ -10,7 +10,7 @@ from argparse import ArgumentParser
 import torch.nn as nn
 import random
 from audio8.data import AudioTextLetterDataset
-from audio8.text import BPEVectorizer, TextTransformerPooledEncoder
+from audio8.text import BPEVectorizer, TextTransformerPooledEncoder, TextBoWPooledEncoder
 from audio8.wav2vec2 import Wav2Vec2PooledEncoder, load_fairseq_bin, CONV_FEATURES
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
@@ -30,14 +30,23 @@ logger = logging.getLogger(__file__)
 def create_model(embeddings, audio_sr=16, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1, audio_d_ff=3072, audio_reduction_type='SHA', audio_d_k=64,
                  text_d_model=512, text_num_heads=8, text_num_layers=8, text_dropout=0.1, text_d_ff=2048, text_rpr_k=8, text_reduction_type='SHA', text_d_k=64,
                  stacking_layers=[],
-                 output_dim=256, **kwargs):
+                 output_dim=256, text_encoder_type='transformer', warmstart_text=None, **kwargs):
     audio_encoder = Wav2Vec2PooledEncoder(conv_features=CONV_FEATURES[audio_sr], d_model=audio_d_model, num_heads=audio_num_heads,
                                           num_layers=audio_num_layers, dropout=audio_dropout, d_ff=audio_d_ff, reduction_type=audio_reduction_type, reduction_d_k=audio_d_k)
 
-    text_encoder = TextTransformerPooledEncoder(embeddings, d_model=text_d_model, d_ff=text_d_ff,
-                                                dropout=text_dropout, num_heads=text_num_heads, num_layers=text_num_layers,
-                                                reduction_d_k=text_d_k, rpr_k=text_rpr_k, rpr_value_on=False, reduction_type=text_reduction_type)
 
+    if text_encoder_type == 'transformer':
+
+        text_encoder = TextTransformerPooledEncoder(embeddings, d_model=text_d_model, d_ff=text_d_ff,
+                                                    dropout=text_dropout, num_heads=text_num_heads, num_layers=text_num_layers,
+                                                    reduction_d_k=text_d_k, rpr_k=text_rpr_k, rpr_value_on=False, reduction_type=text_reduction_type)
+
+        if warmstart_text:
+            # Assume for now that its going to be an NPZ file
+            logger.info("Warm-starting text encoder from NPZ file")
+            load_tlm_npz(text_encoder, warmstart_text)
+    else:
+        text_encoder = TextBoWPooledEncoder(embeddings, reduction_type=text_reduction_type)
     de = BasicDualEncoderModel(audio_encoder, text_encoder, stacking_layers, output_dim)
     return de
 
@@ -68,7 +77,8 @@ def train():
     parser.add_argument("--audio_num_heads", type=int, default=12, help="Number of audio heads")
     parser.add_argument("--audio_num_layers", type=int, default=12, help="Number of audio layers")
     parser.add_argument("--audio_pooling", type=str, choices=['2HA', 'SHA'], default='SHA')
-
+    parser.add_argument("--stacking_layers", type=int, nargs="+", default=[])
+    parser.add_argument("--text_encoder_type", type=str, default="transformer", choices=["transformer", "bow"])
     parser.add_argument("--text_d_model", type=int, default=512, help="Audio model dimension (and embedding dsz)")
     parser.add_argument("--text_d_ff", type=int, default=2048, help="FFN dimension")
     parser.add_argument("--text_d_k", type=int, default=None, help="Reduction for text pooling")
@@ -150,7 +160,9 @@ def train():
 
     preproc_data = baseline.embeddings.load_embeddings('x', dsz=args.text_d_model, known_vocab=vec.vocab,
                                                        preserve_vocab_indices=True,
-                                                       embed_type='default')
+                                                       embed_type='default',
+                                                       # This is ugly, but basically if its word embeddings, load them upfront
+                                                       embed_file=args.warmstart_text if args.text_encoder_type == 'bow' else None)
 
     embeddings = preproc_data['embeddings']
     model = create_model(embeddings, **vars(args)).to(args.device)
@@ -191,11 +203,6 @@ def train():
 
         logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
                     args.restart_from, global_step)
-
-    if args.warmstart_text:
-        # Assume for now that its going to be an NPZ file
-        logger.info("Warm-starting text encoder from NPZ file")
-        load_tlm_npz(model.encoder_2, args.warmstart_text)
 
     optimizer = OptimizerManager(model, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay)
     logger.info("Model has {:,} parameters".format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
