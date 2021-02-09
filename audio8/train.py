@@ -32,7 +32,7 @@ Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 
 def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True):
-    inputs, input_lengths, targets, target_lengths = batch
+    inputs, input_lengths, targets, target_lengths, _ = batch
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
     targets = targets.to(device)

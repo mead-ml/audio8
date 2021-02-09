@@ -25,7 +25,7 @@ Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 def run_step(index2vocab, model, batch, device, verbose=False):
     with torch.no_grad():
-        inputs, input_lengths, targets, target_lengths = batch
+        inputs, input_lengths, targets, target_lengths, _ = batch
         inputs = inputs.to(device)
         pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device)
         logits, _ = model(inputs, pad_mask)

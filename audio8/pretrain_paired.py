@@ -42,7 +42,7 @@ def create_model(embeddings, audio_sr=16, audio_d_model=768, audio_num_heads=12,
 
 
 def run_step(batch, loss_function, device):
-    inputs, input_lengths, targets, target_lengths = batch
+    inputs, input_lengths, targets, target_lengths, _ = batch
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
     targets = targets.to(device)
