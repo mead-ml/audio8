@@ -3,10 +3,6 @@
 """
 
 
-from typing import Tuple, Dict
-import logging
-import json
-import time
 import numpy as np
 import os
 import torch.nn as nn
@@ -15,38 +11,13 @@ import soundfile as sf
 from torch.utils.data import DataLoader, IterableDataset
 from eight_mile.utils import Offsets
 from eight_mile.pytorch.optz import *
-from baseline.vectorizers import BPEVectorizer1D
+
 logger = logging.getLogger(__file__)
-
-
-class TextVectorizer:
-    def __init__(self, vocab: Dict[str, int]):
-        self.vocab = vocab
-
-    def run(self, text) -> np.ndarray:
-        """
-
-        :param text:
-        :return:
-        """
-        return np.array([self.vocab[w] for w in text], dtype=np.int)
-
-class BPEVectorizer:
-    def __init__(self, model_file, vocab_file, emit_begin_tok=[], emit_end_tok=[]):
-        self.internal = BPEVectorizer1D(model_file=model_file, vocab_file=vocab_file,
-                              emit_begin_tok=emit_begin_tok, emit_end_tok=emit_end_tok, transform_fn=str.lower)
-
-    @property
-    def vocab(self):
-        return self.internal.vocab
-
-    def run(self, text) -> np.ndarray:
-        z = [x for x in self.internal._next_element(text, self.vocab)]
-        return np.array(z, dtype=np.int)
 
 
 def pad_init(shp, dtype=np.int32):
     return np.zeros(shp, dtype=dtype)
+
 
 def find_next_fit(v, fits):
     sz = 0
@@ -157,8 +128,6 @@ class AudioTextLetterDataset(IterableDataset):
         self.batches = batch_by_size(
             indices, self.sizes, self.max_elems_per_batch, max_sentences=128,
         )
-        #print(torch.mean(torch.tensor([len(b) for b in self.batches]).float()).item())
-
 
     def _get_worker_info(self):
         return torch.utils.data.get_worker_info() if self.distribute else None
@@ -196,27 +165,32 @@ class AudioTextLetterDataset(IterableDataset):
                 random.shuffle(read_order)
             for rd in read_order:
                 batch = self.batches[rd]
-                zp_text = np.ones((len(batch), self.max_dst_length), dtype=np.long)
-                zp_audio = np.zeros((len(batch), self.max_src_length), dtype=np.float32)
-                audio_lengths = np.zeros(len(batch), dtype=np.int32)
-                text_lengths = np.zeros(len(batch), dtype=np.long)
-                for i, idx in enumerate(batch):
-                    pth = self.files[idx]
-                    tokens = self.tokens[idx]
-                    if len(tokens) > self.max_dst_length:
-                        raise Exception(f"Tokens too long {len(tokens)}")
-                    len_text = min(self.max_dst_length, len(tokens))
-                    zp_text[i, :len_text] = tokens[:len_text]
-                    audio = self.process_sample(pth)
-                    zp_audio[i, :len(audio)] = audio
-                    audio_lengths[i] = len(audio)
-                    text_lengths[i] = len_text
+                batch = self.read_batch(batch)
+                yield batch['signal'], batch['signal_lengths'], batch['token_ids'], batch['token_lengths']
 
-                mx_src_seen = audio_lengths.max()
-                if mx_src_seen > self.max_src_length:
-                    raise Exception(f'Uh oh {mx_src_seen}')
-                mx_dst_seen = min(text_lengths.max(), self.max_dst_length)
-                yield zp_audio[:, :mx_src_seen], audio_lengths, zp_text[:, :mx_dst_seen], text_lengths
+    def read_batch(self, batch):
+        zp_text = np.ones((len(batch), self.max_dst_length), dtype=np.long)
+        zp_audio = np.zeros((len(batch), self.max_src_length), dtype=np.float32)
+        audio_lengths = np.zeros(len(batch), dtype=np.int32)
+        text_lengths = np.zeros(len(batch), dtype=np.long)
+        files = []
+        for i, idx in enumerate(batch):
+            pth = self.files[idx]
+            files.append(pth)
+            tokens = self.tokens[idx]
+            if len(tokens) > self.max_dst_length:
+                raise Exception(f"Tokens too long {len(tokens)}")
+            len_text = min(self.max_dst_length, len(tokens))
+            zp_text[i, :len_text] = tokens[:len_text]
+            audio = self.process_sample(pth)
+            zp_audio[i, :len(audio)] = audio
+            audio_lengths[i] = len(audio)
+            text_lengths[i] = len_text
+        mx_src_seen = audio_lengths.max()
+        if mx_src_seen > self.max_src_length:
+            raise Exception(f'Uh oh {mx_src_seen}')
+        mx_dst_seen = min(text_lengths.max(), self.max_dst_length)
+        return {'signal': zp_audio[:, :mx_src_seen], 'signal_lengths': audio_lengths, 'token_ids': zp_text[:, :mx_dst_seen], 'token_lengths': text_lengths, 'files': files}
 
     def process_sample(self, file):
         """Read in a line and turn it into an entry.  FIXME, get from anywhere

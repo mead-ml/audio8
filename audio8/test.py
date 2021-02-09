@@ -4,7 +4,8 @@
 
 import os
 from argparse import ArgumentParser
-from audio8.data import AudioTextLetterDataset, TextVectorizer
+from audio8.data import AudioTextLetterDataset
+from audio8.text import TextVectorizer, read_vocab_file
 from audio8.wav2vec2 import create_acoustic_model, load_fairseq_bin, W2V_CTC_MAP
 from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Offsets, revlut
@@ -20,17 +21,6 @@ Offsets.VALUES[Offsets.GO] = '<s>'
 Offsets.VALUES[Offsets.PAD] = '<pad>'
 Offsets.VALUES[Offsets.EOS] = '</s>'
 Offsets.VALUES[Offsets.UNK] = '<unk>'
-
-
-def read_vocab_file(vocab_file: str):
-    vocab = []
-    for v in Offsets.VALUES:
-        vocab.append(v)
-    with open(vocab_file) as rf:
-        for i, line in enumerate(rf):
-            v = line.split()[0]
-            vocab.append(v)
-        return {v: i for i, v in enumerate(vocab)}
 
 
 def run_step(index2vocab, model, batch, device, verbose=False):

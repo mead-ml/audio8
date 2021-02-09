@@ -4,16 +4,6 @@ import torch.nn.functional
 from eight_mile.utils import Offsets
 
 
-def read_vocab_file(vocab_file: str):
-    vocab = []
-    for v in Offsets.VALUES:
-        vocab.append(v)
-    with open(vocab_file) as rf:
-        for i, line in enumerate(rf):
-            v = line.split()[0]
-            vocab.append(v)
-        return {v: i for i, v in enumerate(vocab)}
-
 def postproc_letters(sentence):
     sentence = sentence.replace(" ", "").replace("|", " ").strip()
     return sentence

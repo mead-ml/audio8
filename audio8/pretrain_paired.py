@@ -9,67 +9,21 @@ import os
 from argparse import ArgumentParser
 import torch.nn as nn
 import random
-from audio8.data import AudioTextLetterDataset, BPEVectorizer
+from audio8.data import AudioTextLetterDataset
+from audio8.text import BPEVectorizer, TextTransformerPooledEncoder
 from audio8.wav2vec2 import Wav2Vec2PooledEncoder, load_fairseq_bin, CONV_FEATURES
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, revlut
-from baseline.vectorizers import BPEVectorizer1D
 from baseline.pytorch.embeddings import *
 import baseline.embeddings
 from eight_mile.optz import *
 from eight_mile.utils import Offsets
-from eight_mile.pytorch.layers import save_checkpoint, init_distributed, BasicDualEncoderModel,\
-    EmbeddingsStack, TransformerEncoderStack, SingleHeadReduction, find_latest_checkpoint
+from eight_mile.pytorch.layers import save_checkpoint, init_distributed, BasicDualEncoderModel, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
-from eight_mile.pytorch.serialize import convert_transformers_keys
-import torch.nn.functional as F
-import contextlib
-from collections import namedtuple
 logger = logging.getLogger(__file__)
 
 
-
-class TextTransformerPooledEncoder(nn.Module):
-    def __init__(self,
-                 embeddings,
-                 d_model,
-                 d_ff,
-                 dropout,
-                 num_heads,
-                 num_layers,
-                 d_k=None,
-                 rpr_k=None,
-                 reduction_d_k=64,
-                 reduction_type='SHA',
-                 ffn_pdrop=0.1,
-                 windowed_ra=False,
-                 rpr_value_on=False):
-        super().__init__()
-        self.embeddings = EmbeddingsStack({'x': embeddings})
-        self.encoder = TransformerEncoderStack(num_heads=num_heads, d_model=d_model,
-                                               pdrop=dropout, layers=num_layers, activation='gelu', d_ff=d_ff,
-                                               ffn_pdrop=ffn_pdrop,
-                                               d_k=d_k, rpr_k=rpr_k, windowed_ra=windowed_ra, rpr_value_on=rpr_value_on)
-        self.output_dim = d_model
-        if reduction_type == "2HA":
-            self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k),
-                                                   nn.Linear(2*d_model, d_model))
-        elif reduction_type == "SHA":
-            self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k)
-        else:
-            raise Exception("Unknown exception type")
-
-    def forward(self, query):
-        (query, query_lengths) = query
-        #query_mask = (query != Offsets.PAD)
-        att_mask = sequence_mask_mxlen(query_lengths, query.shape[1]).to(query.device)
-        embedded = self.embeddings({'x': query})
-        att_mask = att_mask.unsqueeze(1).unsqueeze(1)
-        encoded_query = self.encoder((embedded, att_mask))
-
-        encoded_query = self.reduction_layer((encoded_query, encoded_query, encoded_query, att_mask))
-        return encoded_query
 
 
 def create_model(embeddings, audio_sr=16, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1, audio_d_ff=3072, audio_reduction_type='SHA', audio_d_k=64,
