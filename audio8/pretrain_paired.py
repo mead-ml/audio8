@@ -106,7 +106,7 @@ def train():
     parser.add_argument("--warmup_steps", type=int, default=10000, help="Num warmup steps")
     parser.add_argument("--saves_per_epoch", type=int, default=10, help="The number of saves per epoch")
     parser.add_argument("--model_type", default="wav2vec2")
-    parser.add_argument("--unfreeze_enc_after_step", default=10_000)
+    parser.add_argument("--unfreeze_enc_after_step", default=10_000, type=int)
     parser.add_argument("--train_steps", type=int, default=400_000, help="Num training steps")
     parser.add_argument("--valid_steps", type=int, default=1000, help="Num valid steps to evaluate each time")
     parser.add_argument("--steps_per_update", type=int, default=100)
