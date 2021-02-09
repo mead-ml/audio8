@@ -9,86 +9,50 @@ import os
 from argparse import ArgumentParser
 import torch.nn as nn
 import random
-from audio8.data import AudioTextLetterDataset, BPEVectorizer
+from audio8.data import AudioTextLetterDataset
+from audio8.text import BPEVectorizer, TextTransformerPooledEncoder, TextBoWPooledEncoder
 from audio8.wav2vec2 import Wav2Vec2PooledEncoder, load_fairseq_bin, CONV_FEATURES
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
+from eight_mile.pytorch.serialize import load_tlm_npz
 from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, revlut
-from baseline.vectorizers import BPEVectorizer1D
 from baseline.pytorch.embeddings import *
 import baseline.embeddings
 from eight_mile.optz import *
 from eight_mile.utils import Offsets
-from eight_mile.pytorch.layers import save_checkpoint, init_distributed, BasicDualEncoderModel,\
-    EmbeddingsStack, TransformerEncoderStack, SingleHeadReduction, find_latest_checkpoint
+from eight_mile.pytorch.layers import save_checkpoint, init_distributed, BasicDualEncoderModel, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
-from eight_mile.pytorch.serialize import convert_transformers_keys
-import torch.nn.functional as F
-import contextlib
-from collections import namedtuple
 logger = logging.getLogger(__file__)
 
 
-
-class TextTransformerPooledEncoder(nn.Module):
-    def __init__(self,
-                 embeddings,
-                 d_model,
-                 d_ff,
-                 dropout,
-                 num_heads,
-                 num_layers,
-                 d_k=None,
-                 rpr_k=None,
-                 reduction_d_k=64,
-                 reduction_type='SHA',
-                 ffn_pdrop=0.1,
-                 windowed_ra=False,
-                 rpr_value_on=False):
-        super().__init__()
-        self.embeddings = EmbeddingsStack({'x': embeddings})
-        self.encoder = TransformerEncoderStack(num_heads=num_heads, d_model=d_model,
-                                               pdrop=dropout, layers=num_layers, activation='gelu', d_ff=d_ff,
-                                               ffn_pdrop=ffn_pdrop,
-                                               d_k=d_k, rpr_k=rpr_k, windowed_ra=windowed_ra, rpr_value_on=rpr_value_on)
-        self.output_dim = d_model
-        if reduction_type == "2HA":
-            self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k),
-                                                   nn.Linear(2*d_model, d_model))
-        elif reduction_type == "SHA":
-            self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k)
-        else:
-            raise Exception("Unknown exception type")
-
-    def forward(self, query):
-        (query, query_lengths) = query
-        #query_mask = (query != Offsets.PAD)
-        att_mask = sequence_mask_mxlen(query_lengths, query.shape[1]).to(query.device)
-        embedded = self.embeddings({'x': query})
-        att_mask = att_mask.unsqueeze(1).unsqueeze(1)
-        encoded_query = self.encoder((embedded, att_mask))
-
-        encoded_query = self.reduction_layer((encoded_query, encoded_query, encoded_query, att_mask))
-        return encoded_query
 
 
 def create_model(embeddings, audio_sr=16, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1, audio_d_ff=3072, audio_reduction_type='SHA', audio_d_k=64,
                  text_d_model=512, text_num_heads=8, text_num_layers=8, text_dropout=0.1, text_d_ff=2048, text_rpr_k=8, text_reduction_type='SHA', text_d_k=64,
                  stacking_layers=[],
-                 output_dim=256, **kwargs):
+                 output_dim=256, text_encoder_type='transformer', warmstart_text=None, **kwargs):
     audio_encoder = Wav2Vec2PooledEncoder(conv_features=CONV_FEATURES[audio_sr], d_model=audio_d_model, num_heads=audio_num_heads,
                                           num_layers=audio_num_layers, dropout=audio_dropout, d_ff=audio_d_ff, reduction_type=audio_reduction_type, reduction_d_k=audio_d_k)
 
-    text_encoder = TextTransformerPooledEncoder(embeddings, d_model=text_d_model, d_ff=text_d_ff,
-                                                dropout=text_dropout, num_heads=text_num_heads, num_layers=text_num_layers,
-                                                reduction_d_k=text_d_k, rpr_k=text_rpr_k, rpr_value_on=False, reduction_type=text_reduction_type)
 
+    if text_encoder_type == 'transformer':
+
+        text_encoder = TextTransformerPooledEncoder(embeddings, d_model=text_d_model, d_ff=text_d_ff,
+                                                    dropout=text_dropout, num_heads=text_num_heads, num_layers=text_num_layers,
+                                                    reduction_d_k=text_d_k, rpr_k=text_rpr_k, rpr_value_on=False, reduction_type=text_reduction_type)
+
+        if warmstart_text:
+            # Assume for now that its going to be an NPZ file
+            logger.info("Warm-starting text encoder from NPZ file")
+            load_tlm_npz(text_encoder, warmstart_text)
+    else:
+        text_encoder = TextBoWPooledEncoder(embeddings, reduction_type=text_reduction_type)
     de = BasicDualEncoderModel(audio_encoder, text_encoder, stacking_layers, output_dim)
     return de
 
 
 def run_step(batch, loss_function, device):
-    inputs, input_lengths, targets, target_lengths = batch
+    inputs, input_lengths, targets, target_lengths, _ = batch
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
     targets = targets.to(device)
@@ -113,7 +77,8 @@ def train():
     parser.add_argument("--audio_num_heads", type=int, default=12, help="Number of audio heads")
     parser.add_argument("--audio_num_layers", type=int, default=12, help="Number of audio layers")
     parser.add_argument("--audio_pooling", type=str, choices=['2HA', 'SHA'], default='SHA')
-
+    parser.add_argument("--stacking_layers", type=int, nargs="+", default=[])
+    parser.add_argument("--text_encoder_type", type=str, default="transformer", choices=["transformer", "bow"])
     parser.add_argument("--text_d_model", type=int, default=512, help="Audio model dimension (and embedding dsz)")
     parser.add_argument("--text_d_ff", type=int, default=2048, help="FFN dimension")
     parser.add_argument("--text_d_k", type=int, default=None, help="Reduction for text pooling")
@@ -122,7 +87,7 @@ def train():
     parser.add_argument("--text_pooling", type=str, choices=['2HA', 'SHA'], default='SHA')
     parser.add_argument("--text_begin_tok", type=str, default="<GO>")
     parser.add_argument("--text_end_tok", type=str, default="<EOS>")
-
+    parser.add_argument("--text_rpr_k", type=int, default=8, help="Relative Attention Representation length")
     parser.add_argument("--output_dim", type=int, default=256)
     parser.add_argument("--nctx", type=int, default=256)
     parser.add_argument("--num_train_workers", type=int, default=4, help="Number train workers")
@@ -156,6 +121,7 @@ def train():
                         help="Are we doing distributed training?")
     parser.add_argument("--vocab_file", help="Vocab for output decoding")
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
+    parser.add_argument("--warmstart_text", help="Restore text encoder from an existing checkpoint")
     parser.add_argument("--local_rank",
                         type=int,
                         default=-1,
@@ -194,7 +160,9 @@ def train():
 
     preproc_data = baseline.embeddings.load_embeddings('x', dsz=args.text_d_model, known_vocab=vec.vocab,
                                                        preserve_vocab_indices=True,
-                                                       embed_type='default')
+                                                       embed_type='default',
+                                                       # This is ugly, but basically if its word embeddings, load them upfront
+                                                       embed_file=args.warmstart_text if args.text_encoder_type == 'bow' else None)
 
     embeddings = preproc_data['embeddings']
     model = create_model(embeddings, **vars(args)).to(args.device)

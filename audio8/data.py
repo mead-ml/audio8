@@ -3,10 +3,6 @@
 """
 
 
-from typing import Tuple, Dict
-import logging
-import json
-import time
 import numpy as np
 import os
 import torch.nn as nn
@@ -15,38 +11,13 @@ import soundfile as sf
 from torch.utils.data import DataLoader, IterableDataset
 from eight_mile.utils import Offsets
 from eight_mile.pytorch.optz import *
-from baseline.vectorizers import BPEVectorizer1D
+
 logger = logging.getLogger(__file__)
-
-
-class TextVectorizer:
-    def __init__(self, vocab: Dict[str, int]):
-        self.vocab = vocab
-
-    def run(self, text) -> np.ndarray:
-        """
-
-        :param text:
-        :return:
-        """
-        return np.array([self.vocab[w] for w in text], dtype=np.int)
-
-class BPEVectorizer:
-    def __init__(self, model_file, vocab_file, emit_begin_tok=[], emit_end_tok=[]):
-        self.internal = BPEVectorizer1D(model_file=model_file, vocab_file=vocab_file,
-                              emit_begin_tok=emit_begin_tok, emit_end_tok=emit_end_tok, transform_fn=str.lower)
-
-    @property
-    def vocab(self):
-        return self.internal.vocab
-
-    def run(self, text) -> np.ndarray:
-        z = [x for x in self.internal._next_element(text, self.vocab)]
-        return np.array(z, dtype=np.int)
 
 
 def pad_init(shp, dtype=np.int32):
     return np.zeros(shp, dtype=dtype)
+
 
 def find_next_fit(v, fits):
     sz = 0
@@ -157,8 +128,6 @@ class AudioTextLetterDataset(IterableDataset):
         self.batches = batch_by_size(
             indices, self.sizes, self.max_elems_per_batch, max_sentences=128,
         )
-        #print(torch.mean(torch.tensor([len(b) for b in self.batches]).float()).item())
-
 
     def _get_worker_info(self):
         return torch.utils.data.get_worker_info() if self.distribute else None
@@ -196,151 +165,32 @@ class AudioTextLetterDataset(IterableDataset):
                 random.shuffle(read_order)
             for rd in read_order:
                 batch = self.batches[rd]
-                zp_text = np.ones((len(batch), self.max_dst_length), dtype=np.long)
-                zp_audio = np.zeros((len(batch), self.max_src_length), dtype=np.float32)
-                audio_lengths = np.zeros(len(batch), dtype=np.int32)
-                text_lengths = np.zeros(len(batch), dtype=np.long)
-                for i, idx in enumerate(batch):
-                    pth = self.files[idx]
-                    tokens = self.tokens[idx]
-                    if len(tokens) > self.max_dst_length:
-                        raise Exception(f"Tokens too long {len(tokens)}")
-                    len_text = min(self.max_dst_length, len(tokens))
-                    zp_text[i, :len_text] = tokens[:len_text]
-                    audio = self.process_sample(pth)
-                    zp_audio[i, :len(audio)] = audio
-                    audio_lengths[i] = len(audio)
-                    text_lengths[i] = len_text
+                batch = self.read_batch(batch)
+                yield batch['signal'], batch['signal_lengths'], batch['token_ids'], batch['token_lengths'], batch['files']
 
-                mx_src_seen = audio_lengths.max()
-                if mx_src_seen > self.max_src_length:
-                    raise Exception(f'Uh oh {mx_src_seen}')
-                mx_dst_seen = min(text_lengths.max(), self.max_dst_length)
-                yield zp_audio[:, :mx_src_seen], audio_lengths, zp_text[:, :mx_dst_seen], text_lengths
-
-    def process_sample(self, file):
-        """Read in a line and turn it into an entry.  FIXME, get from anywhere
-
-        The entries will get collated by the data loader
-
-        :param file:
-        :return:
-        """
-        wav, _ = sf.read(file)
-        wav = wav.astype(np.float32)
-        return wav
-
-
-class BucketingAudioTextLetterDataset(IterableDataset):
-
-    def __init__(self, buckets, tsv_file, vocab, target_tokens_per_batch, distribute=True, shuffle=True, max_dst_length=120):
-        super().__init__()
-        self.bucket_lengths = buckets
-        self.max_dst_length = max_dst_length
-        self.w2i = vocab
-        self.tsv_file = tsv_file
-        self.rank = 0
-        self.world_size = 1
-        self.files = []
-        self.target_tokens_per_batch = target_tokens_per_batch
-        self.shuffle = shuffle
-        self.distribute = distribute
-        if torch.distributed.is_initialized() and distribute:
-            self.rank = torch.distributed.get_rank()
-            self.world_size = torch.distributed.get_world_size()
-
-        self._read_tsv_file(tsv_file)
-
-    def _read_transcription(self, transcription):
-        return transcription.split()
-
-    def _read_tsv_file(self, tsv_file):
-        asc = sorted(self.bucket_lengths)
-        self.files = {b: [] for b in asc}
-        with open(tsv_file, "r") as f:
-            self.directory = f.readline().strip()
-            transcription_file = tsv_file.replace('tsv', 'ltr')
-            with open(transcription_file) as rf:
-                for audio, transcription in zip(f, rf):
-                    basename, x_length = audio.split('\t')
-                    path = os.path.join(self.directory, basename)
-
-                    x_length = int(x_length)
-                    count = find_next_fit(x_length, self.bucket_lengths)
-                    text = self._read_transcription(transcription)
-                    tokens = np.array([self.w2i[t] for t in text])
-                    y_length = len(tokens)
-
-                    if count == 0:
-                        print(x_length)
-                        continue
-                    self.files[count].append((path, x_length, y_length, tokens))
-
-    def _get_worker_info(self):
-        return torch.utils.data.get_worker_info() if self.distribute else None
-
-    def _init_read_order(self):
-        # Each node has the same worker_info, so the unique offsets for each is
-        # rank * num_workers + worker_id
-        # and the total available workers is world_size * num_workers
-        worker_info = self._get_worker_info()
-
-        if worker_info is None:
-            num_workers_per_node = 1
-            node_worker_id = 0
-        else:
-            num_workers_per_node = worker_info.num_workers
-            node_worker_id = worker_info.id
-        all_workers = (self.world_size * num_workers_per_node)
-        offset = self.rank * num_workers_per_node + node_worker_id
-        read_file_order = list(range(offset, len(self.files), all_workers))
-        if not read_file_order:
-            if offset > 0:
-                # This is probably wrong
-                logger.warning(f"There are no files to read for worker {node_worker_id}, offset {offset}!" +
-                               " This might mean that you are passing an incorrect training or validation directory")
-            else:
-                # This is definitely wrong
-                raise Exception(f"No files of pattern {self.pattern} were found in {self.directory}!")
-        return read_file_order, node_worker_id
-
-    def __iter__(self):
-        read_file_order, _ = self._init_read_order()
-        keys = list(self.files.keys())
-        # If we have multiple files per worker, possibly shuffle the file read order
-        while True:
-            if self.shuffle:
-                random.shuffle(read_file_order)
-            for bucket_idx in read_file_order:
-                bucket = keys[bucket_idx]
-                num_samples = max(self.target_tokens_per_batch // bucket, 1)
-                audio_samples = []
-                audio_lengths = []
-                text_samples = []
-                text_lengths = []
-                for (file, x_length, y_length, tokens) in self.files[bucket]:
-
-                    #text = np.array([self.w2i[t] for t in tokens])
-                    zp_text = pad_init(self.max_dst_length, dtype=np.long)
-                    l = min(self.max_dst_length, len(tokens))
-                    zp_text[:l] = tokens[:l]
-                    text_lengths.append(l)
-                    zp_audio = pad_init(bucket, dtype=np.float32)
-                    audio = self.process_sample(file)
-                    zp_audio[:len(audio)] = audio
-                    audio_lengths.append(len(audio))
-                    audio_samples.append(zp_audio)
-                    text_samples.append(zp_text)
-                    if len(audio_samples) == num_samples:
-                        pair = np.stack(audio_samples), np.stack(audio_lengths), np.stack(text_samples), np.stack(text_lengths)
-                        audio_samples = []
-                        audio_lengths = []
-                        text_samples = []
-                        text_lengths = []
-                        yield pair
-                if audio_samples:
-                    pair = np.stack(audio_samples), np.stack(audio_lengths), np.stack(text_samples), np.stack(text_lengths)
-                    yield pair
+    def read_batch(self, batch):
+        zp_text = np.ones((len(batch), self.max_dst_length), dtype=np.long)
+        zp_audio = np.zeros((len(batch), self.max_src_length), dtype=np.float32)
+        audio_lengths = np.zeros(len(batch), dtype=np.int32)
+        text_lengths = np.zeros(len(batch), dtype=np.long)
+        files = []
+        for i, idx in enumerate(batch):
+            pth = self.files[idx]
+            files.append(pth)
+            tokens = self.tokens[idx]
+            if len(tokens) > self.max_dst_length:
+                raise Exception(f"Tokens too long {len(tokens)}")
+            len_text = min(self.max_dst_length, len(tokens))
+            zp_text[i, :len_text] = tokens[:len_text]
+            audio = self.process_sample(pth)
+            zp_audio[i, :len(audio)] = audio
+            audio_lengths[i] = len(audio)
+            text_lengths[i] = len_text
+        mx_src_seen = audio_lengths.max()
+        if mx_src_seen > self.max_src_length:
+            raise Exception(f'Uh oh {mx_src_seen}')
+        mx_dst_seen = min(text_lengths.max(), self.max_dst_length)
+        return {'signal': zp_audio[:, :mx_src_seen], 'signal_lengths': audio_lengths, 'token_ids': zp_text[:, :mx_dst_seen], 'token_lengths': text_lengths, 'files': files}
 
     def process_sample(self, file):
         """Read in a line and turn it into an entry.  FIXME, get from anywhere

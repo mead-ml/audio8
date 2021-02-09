@@ -2,7 +2,7 @@ from audio8.wav2vec2 import Wav2Vec2Model, Wav2Vec2AcousticModel, load_fairseq_b
 import argparse
 from eight_mile.utils import str2bool
 import os
-from audio8.ctc import read_vocab_file
+from audio8.text import read_vocab_file
 import torch
 
 parser = argparse.ArgumentParser(description='Convert a wav2vec2 checkpoint to 8-mile')

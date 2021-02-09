@@ -9,7 +9,8 @@ import os
 from argparse import ArgumentParser
 import torch.nn as nn
 import random
-from audio8.data import AudioTextLetterDataset, TextVectorizer
+from audio8.data import AudioTextLetterDataset
+from audio8.text import TextVectorizer, read_vocab_file
 from audio8.wav2vec2 import create_acoustic_model, load_fairseq_bin
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
@@ -17,7 +18,7 @@ from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, Offset
 from eight_mile.optz import *
 from eight_mile.pytorch.layers import save_checkpoint, init_distributed, sequence_mask, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
-from audio8.ctc import CTCLoss, ctc_metrics, read_vocab_file
+from audio8.ctc import CTCLoss, ctc_metrics
 
 logger = logging.getLogger(__file__)
 Offsets.GO = 0
@@ -31,7 +32,7 @@ Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 
 def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True):
-    inputs, input_lengths, targets, target_lengths = batch
+    inputs, input_lengths, targets, target_lengths, _ = batch
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
     targets = targets.to(device)
