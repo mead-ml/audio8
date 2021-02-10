@@ -2,8 +2,10 @@ import numpy as np
 from typing import Dict
 from baseline.vectorizers import BPEVectorizer1D
 from eight_mile.utils import Offsets
+import torch
 from eight_mile.pytorch.layers import EmbeddingsStack, TransformerEncoderStack, SingleHeadReduction, TwoHeadConcat, sequence_mask_mxlen, MeanPool1D, MaxPool1D
 import torch.nn as nn
+import contextlib
 
 def read_vocab_file(vocab_file: str):
     vocab = []
@@ -47,13 +49,15 @@ class TextBoWPooledEncoder(nn.Module):
         super().__init__()
         self.embeddings = EmbeddingsStack({'x': embeddings})
         self.output_dim = self.embeddings.output_dim
-
+        self.freeze = True
         self.pooler = MaxPool1D(self.output_dim) if reduction_type == 'max' else MeanPool1D(self.output_dim)
 
     def forward(self, query):
         (query, query_length) = query
-        embedded = self.embeddings({'x': query})
+        with torch.no_grad() if self.freeze else contextlib.ExitStack():
+            embedded = self.embeddings({'x': query})
         return self.pooler((embedded, query_length))
+
 
 class TextTransformerPooledEncoder(nn.Module):
     def __init__(self,
@@ -84,14 +88,16 @@ class TextTransformerPooledEncoder(nn.Module):
             self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k)
         else:
             raise Exception("Unknown exception type")
+        self.freeze = True
 
     def forward(self, query):
         (query, query_lengths) = query
         #query_mask = (query != Offsets.PAD)
         att_mask = sequence_mask_mxlen(query_lengths, query.shape[1]).to(query.device)
-        embedded = self.embeddings({'x': query})
-        att_mask = att_mask.unsqueeze(1).unsqueeze(1)
-        encoded_query = self.transformer((embedded, att_mask))
+        with torch.no_grad() if self.freeze else contextlib.ExitStack():
+            embedded = self.embeddings({'x': query})
+            att_mask = att_mask.unsqueeze(1).unsqueeze(1)
+            encoded_query = self.transformer((embedded, att_mask))
 
         encoded_query = self.reduction_layer((encoded_query, encoded_query, encoded_query, att_mask))
         return encoded_query

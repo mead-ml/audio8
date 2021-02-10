@@ -27,9 +27,10 @@ logger = logging.getLogger(__file__)
 
 
 
-def create_model(embeddings, audio_sr=16, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1, audio_d_ff=3072, audio_reduction_type='SHA', audio_d_k=64,
-                 text_d_model=512, text_num_heads=8, text_num_layers=8, text_dropout=0.1, text_d_ff=2048, text_rpr_k=8, text_reduction_type='SHA', text_d_k=64,
-                 stacking_layers=[],
+def create_model(embeddings, audio_sr=16, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1,
+                 audio_d_ff=3072, audio_reduction_type='SHA', audio_d_k=64,
+                 text_d_model=512, text_num_heads=8, text_num_layers=8, text_dropout=0.1, text_d_ff=2048, text_rpr_k=8,
+                 text_reduction_type='SHA', text_d_k=64, stacking_layers=[],
                  output_dim=256, text_encoder_type='transformer', warmstart_text=None, **kwargs):
     audio_encoder = Wav2Vec2PooledEncoder(conv_features=CONV_FEATURES[audio_sr], d_model=audio_d_model, num_heads=audio_num_heads,
                                           num_layers=audio_num_layers, dropout=audio_dropout, d_ff=audio_d_ff, reduction_type=audio_reduction_type, reduction_d_k=audio_d_k)
@@ -106,7 +107,8 @@ def train():
     parser.add_argument("--warmup_steps", type=int, default=10000, help="Num warmup steps")
     parser.add_argument("--saves_per_epoch", type=int, default=10, help="The number of saves per epoch")
     parser.add_argument("--model_type", default="wav2vec2")
-    parser.add_argument("--unfreeze_enc_after_step", default=10_000, type=int)
+    parser.add_argument("--audio_unfreeze_after_step", default=100_000, type=int)
+    parser.add_argument("--text_unfreeze_after_step", default=100_000, type=int)
     parser.add_argument("--train_steps", type=int, default=400_000, help="Num training steps")
     parser.add_argument("--valid_steps", type=int, default=1000, help="Num valid steps to evaluate each time")
     parser.add_argument("--steps_per_update", type=int, default=100)
@@ -147,7 +149,6 @@ def train():
     vec = BPEVectorizer(model_file=args.subword_model_file, vocab_file=args.subword_vocab_file,
                         emit_begin_tok=args.text_begin_tok, emit_end_tok=args.text_end_tok)
 
-    index2vocab = revlut(vec.vocab)
     train_dataset = os.path.join(args.root_dir, args.train_dataset)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
@@ -229,8 +230,11 @@ def train():
 
     for i in range(steps, args.train_steps):
 
-        if steps > args.unfreeze_enc_after_step:
+        if steps > args.audio_unfreeze_after_step:
             _model.encoder_1.freeze = False
+
+        if steps > args.text_unfreeze_after_step:
+            _model.encoder_2.freeze = False
         metrics = {}
         optimizer.zero_grad()
         start = time.time()
