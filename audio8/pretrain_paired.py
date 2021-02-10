@@ -187,7 +187,8 @@ def train():
             model.load_state_dict(torch.load(args.restart_from))
         except:
             print('Trying to load a8 checkpoint from pretrained wav2vec2 w/o CTC')
-            unmapped = model.encoder_1.load_state_dict(torch.load(args.restart_from), strict=False)
+            checkpoint = torch.load(args.restart_from)
+            unmapped = model.encoder_1.encoder.load_state_dict(checkpoint, strict=False)
             print(unmapped)
         if args.restart_tt:
             tick_type = args.restart_tt
