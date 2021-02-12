@@ -4,7 +4,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import math
-from eight_mile.pytorch.layers import pytorch_conv1d, pytorch_linear, Conv1DSame, TransformerEncoderStack, Dense, TwoHeadConcat, SingleHeadReduction, sequence_mask_mxlen
+from eight_mile.pytorch.layers import (pytorch_conv1d,
+                                       pytorch_linear,
+                                       Conv1DSame,
+                                       TransformerEncoderStack,
+                                       Dense,
+                                       MaxPool1D,
+                                       TwoHeadConcat,
+                                       SingleHeadReduction,
+                                       sequence_mask_mxlen)
 import contextlib
 from collections import namedtuple
 CONV_FEATURES = {16: [(512, 10, 5), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 2, 2), (512, 2, 2)],
@@ -291,6 +299,7 @@ class ConvFeatureExtractionModel(nn.Module):
         # BxCxT -> BxTxC
         #x = x.transpose(1, 2)
         return x
+
 
 class GumbelVectorQuantizer(nn.Module):
     def __init__(
@@ -589,6 +598,26 @@ class Wav2Vec2PooledEncoder(nn.Module):
         if pad_mask is not None:
             pad_mask = pad_mask.unsqueeze(1).unsqueeze(1)
         encoded_query = self.reduction_layer((encoded, encoded, encoded, pad_mask))
+        return encoded_query
+
+
+class Wav2Vec2MaxPooledEncoder(nn.Module):
+    def __init__(self, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.1,
+                 dropout_features=0.1):
+        super().__init__()
+        self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff, dropout_input, dropout_features)
+        self.output_dim = self.encoder.output_dim
+
+        self.reduction_layer = MaxPool1D(d_model, dropout)
+        self.freeze = True
+
+    def forward(self, x):
+
+        (x, pad_mask) = x
+        with torch.no_grad() if self.freeze else contextlib.ExitStack():
+            encoded, pad_mask = self.encoder(x, pad_mask)
+        lengths = pad_mask.sum(-1)
+        encoded_query = self.reduction_layer((encoded, lengths))
         return encoded_query
 
 
