@@ -582,10 +582,13 @@ class Wav2Vec2PooledEncoder(nn.Module):
         super().__init__()
         self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff, dropout_input, dropout_features)
         self.output_dim = self.encoder.output_dim
-        if reduction_type == "2HA":
+        reduction_type = reduction_type.lower()
+        if reduction_type == "2ha":
             self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k), nn.Linear(2*d_model, d_model))
-        elif reduction_type == "SHA":
+        elif reduction_type == "sha":
             self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k)
+        elif reduction_type == 'max':
+            self.reduction_layer = MaxPool1D(d_model)
         else:
             raise Exception("Unknown exception type")
         self.freeze = True
@@ -595,29 +598,12 @@ class Wav2Vec2PooledEncoder(nn.Module):
         (x, pad_mask) = x
         with torch.no_grad() if self.freeze else contextlib.ExitStack():
             encoded, pad_mask = self.encoder(x, pad_mask)
-        if pad_mask is not None:
-            pad_mask = pad_mask.unsqueeze(1).unsqueeze(1)
-        encoded_query = self.reduction_layer((encoded, encoded, encoded, pad_mask))
-        return encoded_query
 
-
-class Wav2Vec2MaxPooledEncoder(nn.Module):
-    def __init__(self, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.1,
-                 dropout_features=0.1):
-        super().__init__()
-        self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff, dropout_input, dropout_features)
-        self.output_dim = self.encoder.output_dim
-
-        self.reduction_layer = MaxPool1D(d_model, dropout)
-        self.freeze = True
-
-    def forward(self, x):
-
-        (x, pad_mask) = x
-        with torch.no_grad() if self.freeze else contextlib.ExitStack():
-            encoded, pad_mask = self.encoder(x, pad_mask)
-        lengths = pad_mask.sum(-1)
-        encoded_query = self.reduction_layer((encoded, lengths))
+        if isinstance(self.reduction_layer, MaxPool1D):
+            lengths = pad_mask.sum(-1)
+            encoded_query = self.reduction_layer((encoded, lengths))
+        else:
+            encoded_query = self.reduction_layer((encoded, encoded, encoded, pad_mask))
         return encoded_query
 
 
