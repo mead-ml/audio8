@@ -585,8 +585,14 @@ class Wav2Vec2PooledEncoder(nn.Module):
         reduction_type = reduction_type.lower()
         if reduction_type == "2ha":
             self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k), nn.Linear(2*d_model, d_model))
+        elif reduction_type == "2ha":
+            self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='max'), nn.Linear(2*d_model, d_model))
         elif reduction_type == "sha":
             self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k)
+        elif reduction_type == "sha_max":
+            self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='max')
+        elif reduction_type == "sha_mean":
+            self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='mean')
         elif reduction_type == 'max':
             self.reduction_layer = MaxPool1D(d_model)
         else:
@@ -603,7 +609,7 @@ class Wav2Vec2PooledEncoder(nn.Module):
             lengths = pad_mask.sum(-1)
             encoded_query = self.reduction_layer((encoded, lengths))
         else:
-            encoded_query = self.reduction_layer((encoded, encoded, encoded, pad_mask))
+            encoded_query = self.reduction_layer((encoded, encoded, encoded, pad_mask.unsqueeze(1).unsqueeze(1)))
         return encoded_query
 
 
