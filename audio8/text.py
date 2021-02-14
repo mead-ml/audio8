@@ -81,23 +81,40 @@ class TextTransformerPooledEncoder(nn.Module):
                                                    ffn_pdrop=ffn_pdrop,
                                                    d_k=d_k, rpr_k=rpr_k, windowed_ra=windowed_ra, rpr_value_on=rpr_value_on)
         self.output_dim = d_model
-        if reduction_type == "2HA":
+        reduction_type = reduction_type.lower()
+        if reduction_type == "2ha":
             self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k),
-                                                   nn.Linear(2*d_model, d_model))
-        elif reduction_type == "SHA":
+                                                 nn.Linear(2*d_model, d_model))
+        elif reduction_type == "2ha_mean":
+            self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='mean'),
+                                                 nn.Linear(2*d_model, d_model))
+        elif reduction_type == "2ha_max":
+            self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='max'),
+                                                 nn.Linear(2*d_model, d_model))
+        elif reduction_type == "sha":
             self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k)
+        elif reduction_type == "sha_mean":
+            self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='mean')
+        elif reduction_type == "sha_max":
+            self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='max')
+        elif reduction_type == 'max':
+            self.reduction_layer = MaxPool1D(d_model)
+        elif reduction_type == 'mean':
+            self.reduction_layer = MeanPool1D(d_model)
         else:
             raise Exception("Unknown exception type")
         self.freeze = True
 
     def forward(self, query):
         (query, query_lengths) = query
-        #query_mask = (query != Offsets.PAD)
         att_mask = sequence_mask_mxlen(query_lengths, query.shape[1]).to(query.device)
         with torch.no_grad() if self.freeze else contextlib.ExitStack():
             embedded = self.embeddings({'x': query})
-            att_mask = att_mask.unsqueeze(1).unsqueeze(1)
-            encoded_query = self.transformer((embedded, att_mask))
+            encoded = self.transformer((embedded, att_mask.unsqueeze(1).unsqueeze(1)))
 
-        encoded_query = self.reduction_layer((encoded_query, encoded_query, encoded_query, att_mask))
-        return encoded_query
+        if isinstance(self.reduction_layer, MaxPool1D) or isinstance(self.reduction_layer, MeanPool1D):
+            lengths = att_mask.sum(-1)
+            encoded_reduced = self.reduction_layer((encoded, lengths))
+        else:
+            encoded_reduced = self.reduction_layer((encoded, encoded, encoded, att_mask.unsqueeze(1).unsqueeze(1)))
+        return encoded_reduced
