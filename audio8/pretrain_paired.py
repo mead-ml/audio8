@@ -28,9 +28,9 @@ logger = logging.getLogger(__file__)
 
 
 def create_model(embeddings, audio_sr=16, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1,
-                 audio_d_ff=3072, audio_reduction_type='SHA', audio_d_k=64,
+                 audio_d_ff=3072, audio_reduction_type='max', audio_d_k=64,
                  text_d_model=512, text_num_heads=8, text_num_layers=8, text_dropout=0.1, text_d_ff=2048, text_rpr_k=8,
-                 text_reduction_type='SHA', text_d_k=64, stacking_layers=[],
+                 text_reduction_type='max', text_d_k=64, stacking_layers=[],
                  output_dim=256, text_encoder_type='transformer', warmstart_text=None, **kwargs):
     audio_encoder = Wav2Vec2PooledEncoder(conv_features=CONV_FEATURES[audio_sr], d_model=audio_d_model, num_heads=audio_num_heads,
                                           num_layers=audio_num_layers, dropout=audio_dropout, d_ff=audio_d_ff, reduction_type=audio_reduction_type, reduction_d_k=audio_d_k)
@@ -77,7 +77,7 @@ def train():
     parser.add_argument("--audio_d_k", type=int, default=None, help="Reduction for audio pooling")
     parser.add_argument("--audio_num_heads", type=int, default=12, help="Number of audio heads")
     parser.add_argument("--audio_num_layers", type=int, default=12, help="Number of audio layers")
-    parser.add_argument("--audio_pooling", type=str, choices=['2HA', 'SHA'], default='SHA')
+    parser.add_argument("--audio_reduction_type", type=str, choices=['2ha', 'sha', '2ha_mean', 'sha_mean', '2ha_max', 'sha_max', 'max'], default='max')
     parser.add_argument("--stacking_layers", type=int, nargs="+", default=[])
     parser.add_argument("--text_encoder_type", type=str, default="transformer", choices=["transformer", "bow"])
     parser.add_argument("--text_d_model", type=int, default=512, help="Audio model dimension (and embedding dsz)")
@@ -85,7 +85,7 @@ def train():
     parser.add_argument("--text_d_k", type=int, default=None, help="Reduction for text pooling")
     parser.add_argument("--text_num_heads", type=int, default=8, help="Number of text heads")
     parser.add_argument("--text_num_layers", type=int, default=8, help="Number of text layers")
-    parser.add_argument("--text_pooling", type=str, choices=['2HA', 'SHA'], default='SHA')
+    parser.add_argument("--text_reduction_type", type=str, choices=['2ha', 'sha', '2ha_mean', 'sha_mean', '2ha_max', 'sha_max', 'mean', 'max'], default='max')
     parser.add_argument("--text_begin_tok", type=str, default="<GO>")
     parser.add_argument("--text_end_tok", type=str, default="<EOS>")
     parser.add_argument("--text_rpr_k", type=int, default=8, help="Relative Attention Representation length")
