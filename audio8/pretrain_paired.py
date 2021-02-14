@@ -28,9 +28,9 @@ logger = logging.getLogger(__file__)
 
 
 def create_model(embeddings, audio_sr=16, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1,
-                 audio_d_ff=3072, audio_reduction_type='sha_mean', audio_d_k=64,
+                 audio_d_ff=3072, audio_reduction_type='max', audio_d_k=64,
                  text_d_model=512, text_num_heads=8, text_num_layers=8, text_dropout=0.1, text_d_ff=2048, text_rpr_k=8,
-                 text_reduction_type='sha_mean', text_d_k=64, stacking_layers=[],
+                 text_reduction_type='max', text_d_k=64, stacking_layers=[],
                  output_dim=256, text_encoder_type='transformer', warmstart_text=None, **kwargs):
     audio_encoder = Wav2Vec2PooledEncoder(conv_features=CONV_FEATURES[audio_sr], d_model=audio_d_model, num_heads=audio_num_heads,
                                           num_layers=audio_num_layers, dropout=audio_dropout, d_ff=audio_d_ff, reduction_type=audio_reduction_type, reduction_d_k=audio_d_k)
