@@ -51,6 +51,10 @@ def create_model(embeddings, audio_sr=16, audio_d_model=768, audio_num_heads=12,
     de = BasicDualEncoderModel(audio_encoder, text_encoder, stacking_layers, output_dim)
     return de
 
+def is_raw_checkpoint(checkpoint):
+    if 'mask_emb' in checkpoint:
+        return True
+    return False
 
 def run_step(batch, loss_function, device):
     inputs, input_lengths, targets, target_lengths, _ = batch
@@ -186,9 +190,12 @@ def train():
         try:
             model.load_state_dict(torch.load(args.restart_from))
         except:
-            print('Trying to load a8 checkpoint from pretrained wav2vec2 w/o CTC')
+            print('Trying to load a8 checkpoint from pretrained wav2vec')
             checkpoint = torch.load(args.restart_from)
-            unmapped = model.encoder_1.encoder.load_state_dict(checkpoint, strict=False)
+            if is_raw_checkpoint(checkpoint):
+                unmapped = model.encoder_1.encoder.load_state_dict(checkpoint, strict=False)
+            else:
+                unmapped = model.encoder_1.load_state_dict(checkpoint, strict=False)
             print(unmapped)
         if args.restart_tt:
             tick_type = args.restart_tt
