@@ -4,6 +4,25 @@ import torch.nn.functional
 from eight_mile.utils import Offsets
 
 
+def logits2text(logits, vocab):
+    chars = ''
+    last_ltr = ''
+    eow = '|'
+    for l in logits:
+        if l in [Offsets.PAD, Offsets.EOS]:
+            continue
+
+        lower = vocab[l].lower()
+        if lower == eow:
+            lower = ' '
+        if lower != last_ltr:
+            last_ltr = lower
+            if last_ltr != '<s>':
+               chars += last_ltr
+
+    return chars
+
+
 def postproc_letters(sentence):
     sentence = sentence.replace(" ", "").replace("|", " ").strip()
     return sentence
