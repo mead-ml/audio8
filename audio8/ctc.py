@@ -22,7 +22,7 @@ def kenlm_model(model):
     return fn
 
 def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
-                       k: int = 10,
+                       beam: int = 10,
                        min_thresh: float = 0.001,
                        decoder_blank: str = '<s>',
                        decoder_eow: str = '|',
@@ -39,7 +39,7 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
     :param probs: The output of a single utterance, of shape ``[T, C]``.  Should be in prob space for thresholding
     :param vocab: A mapping from the integer indices of ``C`` to graphemes
     :param min_thresh: A threshold below which to prune.  Assumes softmax
-    :param k: The beam width
+    :param beam: The beam width
     :param decoder_blank: The vocabulary blank value
     :param decoder_eow: The vocabulary end-of-word value
     :param decoder_eos: The vocabulary end-of-sentence value
@@ -111,7 +111,7 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
 
         A_next = list(set(A_next))
         A_next = sorted(A_next, key=score_hyp, reverse=True)
-        A_prev = A_next[:k]
+        A_prev = A_next[:beam]
 
     if return_scores:
         return [(hyp.lower(), score_hyp(hyp)) for hyp in A_prev]

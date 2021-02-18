@@ -36,7 +36,7 @@ def run_step(index2vocab, model, batch, device, verbose=False):
             for logits, input_lengths in zip(logits_batch, input_lengths_batch):
                 input_lengths = input_lengths.item()
                 probs = logits.exp().cpu().numpy()
-                transcription = prefix_beam_search(probs[:input_lengths, :], index2vocab, k=1)[0]
+                transcription = prefix_beam_search(probs[:input_lengths, :], index2vocab, beam=1)[0]
                 print(transcription)
 
     return metrics
