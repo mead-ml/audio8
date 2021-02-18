@@ -25,9 +25,9 @@ def logits2text(logits, vocab):
     return chars
 
 
-def prefix_beam_search(logits: np.ndarray, vocab: Dict[int, str],
+def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
                        k: int = 10,
-                       min_thresh: float = 0.0001,
+                       min_thresh: float = 0.001,
                        decoder_blank: str = '<s>',
                        decoder_eow: str = '|',
                        decoder_eos: str = '</s>'):
@@ -36,29 +36,28 @@ def prefix_beam_search(logits: np.ndarray, vocab: Dict[int, str],
     The implementation here is "Algorithm 1" from the paper, and also partly based on the excellent article here:
     https://medium.com/corti-ai/ctc-networks-and-language-models-prefix-beam-search-explained-c11d1ee23306
 
-    :param logits: The output of a single utterance, of shape ``[T, C]``
+    :param probs: The output of a single utterance, of shape ``[T, C]``.  Should be in prob space for thresholding
     :param vocab: A mapping from the integer indices of ``C`` to graphemes
-    :param p_lm: An optional language model, defaults to ``None``
-    :param k:
-    :param alpha:
-    :param beta:
-    :param min_thresh:
+    :param min_thresh: A threshold below which to prune.  Assumes softmax
+    :param k: The beam width
+    :param decoder_blank: The vocabulary blank value
+    :param decoder_eow: The vocabulary end-of-word value
+    :param decoder_eos: The vocabulary end-of-sentence value
     :return:
     """
-    #p_lm = p_lm if p_lm is not None else lambda x: 1
     p_non_blank = defaultdict(Counter)
     p_blank = defaultdict(Counter)
     eos = '.'
     eow = ' '
     A_prev = ['']
     A_next = ['']
-    T = logits.shape[0]
+    T = probs.shape[0]
     blank_idx = 0
     p_blank[0][''] = 1
     p_non_blank[0][''] = 0
 
     for t in range(1, T):
-        chars_above_thresh = np.where(logits[t] > min_thresh)[0]
+        chars_above_thresh = np.where(probs[t] > min_thresh)[0]
         for hyp in A_prev:
             # If we hit the end of a sentence, already we need to propagate the probability through
             if len(hyp) > 0 and hyp[-1] == eos:
@@ -67,7 +66,7 @@ def prefix_beam_search(logits: np.ndarray, vocab: Dict[int, str],
                 A_next.append(hyp)
                 continue
 
-            p_at_t = logits[t]
+            p_at_t = probs[t]
 
             for c in chars_above_thresh:
 
@@ -97,11 +96,12 @@ def prefix_beam_search(logits: np.ndarray, vocab: Dict[int, str],
                     if hyp_next not in A_prev:
                         p_blank[t][hyp_next] += p_at_t[blank_idx] * (p_blank[t - 1][hyp_next] + p_non_blank[t - 1][hyp_next])
                         p_non_blank[t][hyp_next] += p_at_t[c] * p_non_blank[t - 1][hyp_next]
-                    A_next.append(hyp_next)
+                        A_next.append(hyp_next)
 
+        A_next = list(set(A_next))
         A_next = sorted(A_next, key=lambda s: (p_non_blank[t][s] + p_blank[t][s]), reverse=True)
         A_prev = A_next[:k]
-    return A_prev[0]
+    return A_prev
 
 def postproc_letters(sentence):
     sentence = sentence.replace(" ", "").replace("|", " ").strip()
