@@ -8,6 +8,19 @@ import numpy as np
 from collections import defaultdict, Counter
 
 
+def kenlm_model(model):
+    """Creator function to score from a kenlm model
+
+    To use this, create your model and then pass `language_model=kenlm_model(model)`
+
+    :param model:
+    :return:
+    """
+    def fn(hyp_next):
+        score = 10 ** model.score(hyp_next.replace(' .', ''), True, False)
+        return score
+    return fn
+
 def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
                        k: int = 10,
                        min_thresh: float = 0.001,
@@ -86,7 +99,7 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
                     elif v == eow:
                         p_lm = 1
                         if language_model is not None:
-                            p_lm = 10 ** language_model.score(hyp_next.replace(' .', ''), True, False)
+                            p_lm = language_model(hyp_next)
 
                         p_non_blank[t][hyp_next] += (p_lm**alpha) * p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
                     else:
