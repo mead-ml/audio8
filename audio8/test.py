@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Offsets, revlut
 from eight_mile.pytorch.layers import sequence_mask, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
-from ctc import ctc_metrics, logits2text
+from ctc import ctc_metrics, logits2text, prefix_beam_search
 
 logger = logging.getLogger(__file__)
 
@@ -34,7 +34,7 @@ def run_step(index2vocab, model, batch, device, verbose=False):
         if verbose:
             logits = torch.argmax(logits[0], -1).tolist()
             input_lengths = input_lengths[0].item()
-            print(logits2text(logits[:input_lengths], index2vocab))
+            print(prefix_beam_search(logits[:input_lengths], index2vocab))
     return metrics
 
 
