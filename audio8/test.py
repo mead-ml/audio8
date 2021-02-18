@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Offsets, revlut
 from eight_mile.pytorch.layers import sequence_mask, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
-from ctc import ctc_metrics, logits2text, prefix_beam_search
+from ctc import ctc_metrics, prefix_beam_search
 
 logger = logging.getLogger(__file__)
 
@@ -23,7 +23,6 @@ Offsets.VALUES[Offsets.EOS] = '</s>'
 Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 
-
 def run_step(index2vocab, model, batch, device, verbose=False):
     with torch.no_grad():
         inputs, input_lengths, targets, target_lengths, _ = batch
@@ -32,9 +31,14 @@ def run_step(index2vocab, model, batch, device, verbose=False):
         logits, _ = model(inputs, pad_mask)
         metrics = ctc_metrics(logits, targets, input_lengths, index2vocab)
         if verbose:
-            logits = torch.argmax(logits[0], -1).tolist()
-            input_lengths = input_lengths[0].item()
-            print(prefix_beam_search(logits[:input_lengths], index2vocab))
+            input_lengths_batch = pad_mask.sum(-1)
+            logits_batch = logits
+            for logits, input_lengths in zip(logits_batch, input_lengths_batch):
+                input_lengths = input_lengths.item()
+                probs = logits.exp().cpu().numpy()
+                transcription = prefix_beam_search(probs[:input_lengths, :], index2vocab, k=1)[0]
+                print(transcription)
+
     return metrics
 
 

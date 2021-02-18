@@ -18,7 +18,7 @@ from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, Offset
 from eight_mile.optz import *
 from eight_mile.pytorch.layers import save_checkpoint, init_distributed, sequence_mask, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
-from audio8.ctc import CTCLoss, ctc_metrics
+from audio8.ctc import CTCLoss, ctc_metrics, prefix_beam_search
 
 logger = logging.getLogger(__file__)
 Offsets.GO = 0
@@ -27,8 +27,6 @@ Offsets.VALUES[Offsets.GO] = '<s>'
 Offsets.VALUES[Offsets.PAD] = '<pad>'
 Offsets.VALUES[Offsets.EOS] = '</s>'
 Offsets.VALUES[Offsets.UNK] = '<unk>'
-
-
 
 
 def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True):
@@ -43,11 +41,16 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
     metrics = {}
     metrics['batch_size'] = inputs.shape[0]
     if not training:
-        if verbose:
-            logits = torch.argmax(logits[0], -1).tolist()
-            input_lengths = input_lengths[0].item()
-            print([index2vocab[k] for k in logits[:input_lengths] if k not in [0, 1, 2]])
+
         metrics = ctc_metrics(logits, targets, input_lengths, index2vocab)
+        if verbose:
+            input_lengths_batch = pad_mask.sum(-1)
+            logits_batch = logits
+            for logits, input_lengths in zip(logits_batch, input_lengths_batch):
+                input_lengths = input_lengths.item()
+                probs = logits.exp().cpu().numpy()
+                transcription = prefix_beam_search(probs[:input_lengths, :], index2vocab, k=1)[0]
+                print(transcription)
     return loss, metrics
 
 

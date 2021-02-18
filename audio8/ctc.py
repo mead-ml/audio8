@@ -1,28 +1,11 @@
 import torch
 import torch.nn
+import re
 import torch.nn.functional
 from eight_mile.utils import Offsets
 from typing import Dict, Optional, Callable
 import numpy as np
 from collections import defaultdict, Counter
-
-def logits2text(logits, vocab):
-    chars = ''
-    last_ltr = ''
-    eow = '|'
-    for l in logits:
-        if l in [Offsets.PAD, Offsets.EOS]:
-            continue
-
-        lower = vocab[l].lower()
-        if lower == eow:
-            lower = ' '
-        if lower != last_ltr:
-            last_ltr = lower
-            if last_ltr != '<s>':
-               chars += last_ltr
-
-    return chars
 
 
 def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
@@ -30,7 +13,10 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
                        min_thresh: float = 0.001,
                        decoder_blank: str = '<s>',
                        decoder_eow: str = '|',
-                       decoder_eos: str = '</s>'):
+                       decoder_eos: str = '</s>',
+                       language_model: Optional[Callable] = None,
+                       alpha: float = 0.3,
+                       beta: float = 5.0):
     """Use a prefix beam search (https://arxiv.org/pdf/1408.2873.pdf) to decode
 
     The implementation here is "Algorithm 1" from the paper, and also partly based on the excellent article here:
@@ -43,10 +29,12 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
     :param decoder_blank: The vocabulary blank value
     :param decoder_eow: The vocabulary end-of-word value
     :param decoder_eos: The vocabulary end-of-sentence value
+    :param language_model: An optional kenlm model
     :return:
     """
     p_non_blank = defaultdict(Counter)
     p_blank = defaultdict(Counter)
+    length_s = lambda l: len(re.findall(r'\w+[\s|\.]', l)) + 1
     eos = '.'
     eow = ' '
     A_prev = ['']
@@ -90,7 +78,10 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
                         p_non_blank[t][hyp] += p_at_t[c] * p_non_blank[t-1][hyp]
                     elif v == eow:
                         # TODO: add LM here
-                        p_non_blank[t][hyp_next] += p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
+                        p_lm = 1
+                        if language_model is not None:
+                            p_lm = np.exp(language_model.score(hyp_next.replace(' .', ''), True, False))
+                        p_non_blank[t][hyp_next] += (p_lm**alpha) * p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
                     else:
                         p_non_blank[t][hyp_next] += p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
                     if hyp_next not in A_prev:
@@ -99,9 +90,9 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
                         A_next.append(hyp_next)
 
         A_next = list(set(A_next))
-        A_next = sorted(A_next, key=lambda s: (p_non_blank[t][s] + p_blank[t][s]), reverse=True)
+        A_next = sorted(A_next, key=lambda s: (p_non_blank[t][s] + p_blank[t][s]) * (length_s(s)**beta), reverse=True)
         A_prev = A_next[:k]
-    return A_prev
+    return [hyp.lower() for hyp in A_prev]
 
 def postproc_letters(sentence):
     sentence = sentence.replace(" ", "").replace("|", " ").strip()
