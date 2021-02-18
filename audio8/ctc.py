@@ -78,7 +78,7 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
                     elif v == eow:
                         p_lm = 1
                         if language_model is not None:
-                            p_lm = language_model.score(hyp_next.replace(' .', ''), True, False) * 2.302587
+                            p_lm = np.exp(language_model.score(hyp_next.replace(' .', ''), True, False) * 2.302587)
                         p_non_blank[t][hyp_next] += (p_lm**alpha) * p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
                     else:
                         p_non_blank[t][hyp_next] += p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
