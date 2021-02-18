@@ -43,7 +43,6 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
     blank_idx = 0
     p_blank[0][''] = 1
     p_non_blank[0][''] = 0
-
     for t in range(1, T):
         chars_above_thresh = np.where(probs[t] > min_thresh)[0]
         for hyp in A_prev:
@@ -77,10 +76,9 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
                         p_non_blank[t][hyp_next] += p_at_t[c] * p_blank[t - 1][hyp]
                         p_non_blank[t][hyp] += p_at_t[c] * p_non_blank[t-1][hyp]
                     elif v == eow:
-                        # TODO: add LM here
                         p_lm = 1
                         if language_model is not None:
-                            p_lm = np.exp(language_model.score(hyp_next.replace(' .', ''), True, False))
+                            p_lm = language_model.score(hyp_next.replace(' .', ''), True, False) * 2.302587
                         p_non_blank[t][hyp_next] += (p_lm**alpha) * p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
                     else:
                         p_non_blank[t][hyp_next] += p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
