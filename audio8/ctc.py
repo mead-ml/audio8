@@ -16,7 +16,8 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
                        decoder_eos: str = '</s>',
                        language_model: Optional[Callable] = None,
                        alpha: float = 0.3,
-                       beta: float = 5.0):
+                       beta: float = 5.0,
+                       return_scores: bool = False):
     """Use a prefix beam search (https://arxiv.org/pdf/1408.2873.pdf) to decode
 
     The implementation here is "Algorithm 1" from the paper, and also partly based on the excellent article here:
@@ -30,6 +31,9 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
     :param decoder_eow: The vocabulary end-of-word value
     :param decoder_eos: The vocabulary end-of-sentence value
     :param language_model: An optional kenlm model
+    :param alpha: how much weight to place on the LM
+    :param beta: how much weight to place on the length
+    :param return_scores: If this is true, return posteriors for N-bests
     :return:
     """
     p_non_blank = defaultdict(Counter)
@@ -43,6 +47,10 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
     blank_idx = 0
     p_blank[0][''] = 1
     p_non_blank[0][''] = 0
+
+    def score_hyp(s):
+        return (p_non_blank[t][s] + p_blank[t][s]) * (length_s(s) ** beta)
+
     for t in range(1, T):
         chars_above_thresh = np.where(probs[t] > min_thresh)[0]
         for hyp in A_prev:
@@ -89,8 +97,11 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
                         A_next.append(hyp_next)
 
         A_next = list(set(A_next))
-        A_next = sorted(A_next, key=lambda s: (p_non_blank[t][s] + p_blank[t][s]) * (length_s(s)**beta), reverse=True)
+        A_next = sorted(A_next, key=score_hyp, reverse=True)
         A_prev = A_next[:k]
+
+    if return_scores:
+        return [(hyp.lower(), score_hyp(hyp)) for hyp in A_prev]
     return [hyp.lower() for hyp in A_prev]
 
 def postproc_letters(sentence):
