@@ -32,7 +32,8 @@ def train():
                         help="dataset key for basedir")
     parser.add_argument("--num_vq_vars", type=int, default=320)
     parser.add_argument("--num_vq_groups", type=int, default=2)
-    parser.add_argument("--sr", type=int, choices=[8, 16], default=16)
+    parser.add_argument("--input_sample_rate", type=int, default=16_000)
+    parser.add_argument("--target_sample_rate", type=int, default=16_000)
     parser.add_argument("--d_model", type=int, default=768, help="Model dimension (and embedding dsz)")
     parser.add_argument("--d_ff", type=int, default=3072, help="FFN dimension")
     parser.add_argument("--num_heads", type=int, default=12, help="Number of heads")
@@ -100,8 +101,8 @@ def train():
     valid_loader = DataLoader(valid_set, batch_size=None)
     logger.info("Loaded datasets")
 
-    model = create_model(args.sr, args.num_vq_vars, args.num_vq_groups, args.d_model, args.num_heads, args.num_layers,
-                        args.dropout, args.d_ff).to(args.device)
+    model = create_model(args.target_sample_rate//1000, args.num_vq_vars, args.num_vq_groups, args.d_model, args.num_heads, args.num_layers,
+                         args.dropout, args.d_ff).to(args.device)
 
     loss_function = create_loss(args.num_vq_vars * args.num_vq_groups, 100).to(args.device)
     logger.info("Loaded model and loss")

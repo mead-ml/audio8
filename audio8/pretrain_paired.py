@@ -72,6 +72,8 @@ def train():
     parser.add_argument("--valid_dataset", type=str, help='Dataset (by name), e.g. dev-other')
     parser.add_argument("--subword_model_file", type=str, help="The BPE model file", required=True)
     parser.add_argument("--subword_vocab_file", type=str, help="The BPE subword vocab", required=True)
+    parser.add_argument("--input_sample_rate", type=int, default=16_000)
+    parser.add_argument("--target_sample_rate", type=int, default=16_000)
     parser.add_argument("--dataset_key", default="LibriSpeech",
                         help="dataset key for basedir")
     parser.add_argument("--grad_accum", type=int, default=1)
@@ -156,8 +158,12 @@ def train():
     train_dataset = os.path.join(args.root_dir, args.train_dataset)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
-    train_set = AudioTextLetterDataset(train_dataset, vec, args.target_tokens_per_batch, args.max_sample_len, shuffle=True, distribute=args.distributed, tgt_type=AudioTextLetterDataset.TGT_WRD)
-    valid_set = AudioTextLetterDataset(valid_dataset, vec, args.target_tokens_per_batch, args.max_sample_len, distribute=False, shuffle=False)
+    train_set = AudioTextLetterDataset(train_dataset, vec, args.target_tokens_per_batch, args.max_sample_len,
+                                       input_sample_rate=args.input_sample_rate, target_sample_rate=args.target_sample_rate,
+                                       shuffle=True, distribute=args.distributed, tgt_type=AudioTextLetterDataset.TGT_WRD)
+    valid_set = AudioTextLetterDataset(valid_dataset, vec, args.target_tokens_per_batch, args.max_sample_len,
+                                       input_sample_rate=args.input_sample_rate, target_sample_rate=args.target_sample_rate,
+                                       distribute=False, shuffle=False)
     train_loader = DataLoader(train_set, batch_size=None)  # , num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
 

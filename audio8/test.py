@@ -51,7 +51,8 @@ def evaluate():
     parser.add_argument("--dict_file", type=str, help="Dictionary file", default='dict.ltr.txt')
     parser.add_argument("--dataset_key", default="LibriSpeech",
                         help="dataset key for basedir")
-    parser.add_argument("--sr", type=int, choices=[8, 16], default=16)
+    parser.add_argument("--input_sample_rate", type=int, default=16_000)
+    parser.add_argument("--target_sample_rate", type=int, default=16_000)
     parser.add_argument("--d_model", type=int, default=768, help="Model dimension (and embedding dsz)")
     parser.add_argument("--d_ff", type=int, default=3072, help="FFN dimension")
     parser.add_argument("--d_k", type=int, default=None, help="Dimension per head.  Use if num_heads=1 to reduce dims")
@@ -81,12 +82,15 @@ def evaluate():
     index2vocab = revlut(vocab)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
-    valid_set = AudioTextLetterDataset(valid_dataset, vec, args.target_tokens_per_batch, args.max_sample_len, distribute=False, shuffle=False)
+    valid_set = AudioTextLetterDataset(valid_dataset, vec, args.target_tokens_per_batch, args.max_sample_len,
+                                       input_sample_rate=args.input_sample_rate,
+                                       target_sample_rate=args.target_sample_rate,
+                                       distribute=False, shuffle=False)
     valid_loader = DataLoader(valid_set, batch_size=None)
     logger.info("Loaded datasets")
 
     num_labels = len(vocab)
-    model = create_acoustic_model(num_labels, args.sr, args.d_model, args.num_heads, args.num_layers,
+    model = create_acoustic_model(num_labels, args.target_sample_rate//1000, args.d_model, args.num_heads, args.num_layers,
                                   0.0, args.d_ff).to(args.device)
 
     if not args.checkpoint:
