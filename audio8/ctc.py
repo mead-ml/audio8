@@ -33,7 +33,7 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
                        return_scores: bool = False):
     """Use a prefix beam search (https://arxiv.org/pdf/1408.2873.pdf) to decode
 
-    The implementation here is "Algorithm 1" from the paper, and is a modified from
+    The implementation here is "Algorithm 1" from the paper, and is modified from
     on the excellent article here:
 
     https://medium.com/corti-ai/ctc-networks-and-language-models-prefix-beam-search-explained-c11d1ee23306
@@ -57,7 +57,6 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
     eos = '.'
     eow = ' '
     A_prev = ['']
-    A_next = ['']
     T = probs.shape[0]
     blank_idx = 0
     p_blank[0][''] = 1
