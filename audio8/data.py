@@ -20,13 +20,8 @@ logger = logging.getLogger(__file__)
 
 class SoundfileAudioReader:
 
-    def __init__(self, target_sample_rate=16_000):
-        self.target_sample_rate = target_sample_rate
-
     def read(self, file, max_length=-1):
-        wav, sr = sf.read(file)
-        if sr != self.target_sample_rate:
-            raise Exception(f"Expected {self.target_sample_rate} sampling rate")
+        wav, _ = sf.read(file)
         wav = wav.astype(np.float32)
 
         if max_length > 0:
