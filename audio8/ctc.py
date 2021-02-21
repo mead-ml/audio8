@@ -33,7 +33,9 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
                        return_scores: bool = False):
     """Use a prefix beam search (https://arxiv.org/pdf/1408.2873.pdf) to decode
 
-    The implementation here is "Algorithm 1" from the paper, and also partly based on the excellent article here:
+    The implementation here is "Algorithm 1" from the paper, and is a modified from
+    on the excellent article here:
+
     https://medium.com/corti-ai/ctc-networks-and-language-models-prefix-beam-search-explained-c11d1ee23306
 
     :param probs: The output of a single utterance, of shape ``[T, C]``.  Should be in prob space for thresholding
