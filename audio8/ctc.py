@@ -93,7 +93,7 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
                         p_non_blank[t][hyp] += p_at_t[c] * p_non_blank[t-1][hyp]
 
                     elif len(hyp.replace(' ', '')) > 0 and v in (eow, eos,):
-                        p_lm = lm_prob(hyp_next.replace(' .', '').strip())
+                        p_lm = lm_prob(hyp_next.strip())
                         p_non_blank[t][hyp_next] += (p_lm**alpha) * p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
                     else:
                         p_non_blank[t][hyp_next] += p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
