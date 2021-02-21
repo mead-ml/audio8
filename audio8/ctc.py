@@ -17,7 +17,12 @@ def kenlm_model(model):
     :return:
     """
     def fn(hyp_next):
-        score = 10 ** model.score(hyp_next.replace(' .', ''), True, False)
+        if hyp_next.endswith(' .'):
+            end_of_sentence = True
+        else:
+            end_of_sentence = False
+
+        score = 10 ** model.score(hyp_next.replace(' .', ''), True, end_of_sentence)
         return score
     return fn
 
