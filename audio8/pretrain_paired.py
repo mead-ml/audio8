@@ -163,7 +163,7 @@ def train():
                                        shuffle=True, distribute=args.distributed, tgt_type=AudioTextLetterDataset.TGT_WRD)
     valid_set = AudioTextLetterDataset(valid_dataset, vec, args.target_tokens_per_batch, args.max_sample_len,
                                        input_sample_rate=args.input_sample_rate, target_sample_rate=args.target_sample_rate,
-                                       distribute=False, shuffle=False)
+                                       distribute=False, shuffle=False, tgt_type=AudioTextLetterDataset.TGT_WRD)
     train_loader = DataLoader(train_set, batch_size=None)  # , num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
 
