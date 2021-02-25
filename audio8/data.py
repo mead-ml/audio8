@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader, IterableDataset
 from eight_mile.utils import Offsets
 from eight_mile.pytorch.optz import *
 try:
-    import torchaudio
+    import scipy.signal
 except:
     pass
 logger = logging.getLogger(__file__)
@@ -20,9 +20,12 @@ logger = logging.getLogger(__file__)
 
 class SoundfileAudioReader:
 
+    def transform(self, audio):
+        return audio.astype(np.float32)
+
     def read(self, file, max_length=-1):
         wav, _ = sf.read(file)
-        wav = wav.astype(np.float32)
+        wav = self.transform(wav)
 
         if max_length > 0:
             return wav[:max_length]
@@ -30,26 +33,24 @@ class SoundfileAudioReader:
         return wav
 
 
-class TorchAudioReader:
+class AudioResampleReader(SoundfileAudioReader):
+
+    def __init__(self, sample_factor: float):
+        """
+        Resampl
+        :param sample_factor:
+        """
+        self.sample_factor = sample_factor
 
     def transform(self, wav):
-        return wav
+        """Do an FFT-based resample of the wav
 
-    def read(self, file, max_length=-1):
-        wav, sr = torchaudio.load(file)
-        wav = self.transform(wav).view(-1)
-        if max_length > 0:
-            wav = wav[:max_length]
-
-        return wav.numpy()
-
-
-class AudioResampleReader(TorchAudioReader):
-    def __init__(self, input_sample_rate=8000, target_sample_rate=16_000):
-        self.resampler = torchaudio.transforms.Resample(orig_freq=input_sample_rate, new_freq=target_sample_rate)
-
-    def transform(self, wav):
-        return self.resampler(wav)
+        :param wav:
+        :return:
+        """
+        num = int(len(wav) * self.sample_factor)
+        resample = scipy.signal.resample(wav, num)
+        return resample.astype(dtype=np.float32)
 
 
 def pad_init(shp, dtype=np.int32):
@@ -117,7 +118,7 @@ class AudioTextLetterDataset(IterableDataset):
     def __init__(self, tsv_file, vec, target_tokens_per_batch, max_src_length, distribute=True, shuffle=True,
                  max_dst_length=1200, tgt_type=TGT_LETTER, input_sample_rate=16_000, target_sample_rate=16_000):
         super().__init__()
-        self.reader = AudioResampleReader(input_sample_rate, target_sample_rate) if input_sample_rate != target_sample_rate else SoundfileAudioReader()
+        self.reader = AudioResampleReader(target_sample_rate/input_sample_rate) if input_sample_rate != target_sample_rate else SoundfileAudioReader()
         self.min_src_length = 0  # TODO: remove?
         self.max_src_length = max_src_length
         self.max_dst_length = max_dst_length
@@ -247,7 +248,7 @@ class AudioFileDataset(IterableDataset):
     def __init__(self, manifest, max_length, target_tokens_per_batch, distribute=True,
                  shuffle=True,  min_length=0, input_sample_rate=16_000, target_sample_rate=16_000):
         super().__init__()
-        self.reader = AudioResampleReader(input_sample_rate, target_sample_rate) if input_sample_rate != target_sample_rate else SoundfileAudioReader()
+        self.reader = AudioResampleReader(target_sample_rate/input_sample_rate) if input_sample_rate != target_sample_rate else SoundfileAudioReader()
         self.max_length = max_length
         self.manifest = manifest
         self.rank = 0
