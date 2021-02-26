@@ -160,7 +160,7 @@ class AudioTextLetterDataset(IterableDataset):
                         tokens = self.vec.run(text)
                     # If the data is already BPE, we dont want to re-tokenize it, we just have to convert it to ints
                     else:
-                        tokens = np.array([self.vec.vocab[t] for t in text], dtype=np.int)
+                        tokens = np.array([self.vec.vocab.get(t, Offsets.UNK) for t in text], dtype=np.int)
                     self.files.append(path)
                     self.sizes.append(x_length)
                     self.tokens.append(tokens)
