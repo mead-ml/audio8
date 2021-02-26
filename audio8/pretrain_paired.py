@@ -130,6 +130,9 @@ def train():
     parser.add_argument("--vocab_file", help="Vocab for output decoding")
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
     parser.add_argument("--warmstart_text", help="Restore text encoder from an existing checkpoint")
+    parser.add_argument("--pretok", help="Is the text data already pre-tokenized into sub-words?",
+                        type=str2bool,
+                        default=False)
     parser.add_argument("--local_rank",
                         type=int,
                         default=-1,
@@ -158,12 +161,13 @@ def train():
     train_dataset = os.path.join(args.root_dir, args.train_dataset)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
+    tgt_type = AudioTextLetterDataset.TGT_BPE if args.pretok else AudioTextLetterDataset.TGT_WRD
     train_set = AudioTextLetterDataset(train_dataset, vec, args.target_tokens_per_batch, args.max_sample_len,
                                        input_sample_rate=args.input_sample_rate, target_sample_rate=args.target_sample_rate,
-                                       shuffle=True, distribute=args.distributed, tgt_type=AudioTextLetterDataset.TGT_WRD)
+                                       shuffle=True, distribute=args.distributed, tgt_type=tgt_type)
     valid_set = AudioTextLetterDataset(valid_dataset, vec, args.target_tokens_per_batch, args.max_sample_len,
                                        input_sample_rate=args.input_sample_rate, target_sample_rate=args.target_sample_rate,
-                                       distribute=False, shuffle=False, tgt_type=AudioTextLetterDataset.TGT_WRD)
+                                       distribute=False, shuffle=False, tgt_type=tgt_type)
     train_loader = DataLoader(train_set, batch_size=None)  # , num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
 
