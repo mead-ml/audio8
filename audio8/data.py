@@ -118,6 +118,7 @@ class AudioTextLetterDataset(IterableDataset):
     def __init__(self, tsv_file, vec, target_tokens_per_batch, max_src_length, distribute=True, shuffle=True,
                  max_dst_length=1200, tgt_type=TGT_LETTER, input_sample_rate=16_000, target_sample_rate=16_000):
         super().__init__()
+        self.sample_factor = target_sample_rate/input_sample_rate
         self.reader = AudioResampleReader(target_sample_rate/input_sample_rate) if input_sample_rate != target_sample_rate else SoundfileAudioReader()
         self.min_src_length = 0  # TODO: remove?
         self.max_src_length = max_src_length
@@ -151,8 +152,8 @@ class AudioTextLetterDataset(IterableDataset):
                 for i, (audio, transcription) in enumerate(zip(f, rf)):
                     basename, x_length = audio.split('\t')
                     path = os.path.join(self.directory, basename)
+                    x_length = int(int(x_length) * self.sample_factor)
 
-                    x_length = int(x_length)
                     if x_length < self.min_src_length or x_length > self.max_src_length:
                         continue
                     text = self._read_transcription(transcription)
@@ -231,12 +232,13 @@ class AudioTextLetterDataset(IterableDataset):
             len_text = min(self.max_dst_length, len(tokens))
             zp_text[i, :len_text] = tokens[:len_text]
             audio = self.process_sample(pth)
+            if len(audio) > self.max_src_length:
+                raise Exception(f'Unexpected audio length {len(audio)}.  Max should be {self.max_src_length}')
             zp_audio[i, :len(audio)] = audio
             audio_lengths[i] = len(audio)
             text_lengths[i] = len_text
         mx_src_seen = audio_lengths.max()
-        if mx_src_seen > self.max_src_length:
-            raise Exception(f'Uh oh {mx_src_seen}')
+
         mx_dst_seen = min(text_lengths.max(), self.max_dst_length)
         return {'signal': zp_audio[:, :mx_src_seen], 'signal_lengths': audio_lengths, 'token_ids': zp_text[:, :mx_dst_seen], 'token_lengths': text_lengths, 'files': files}
 
