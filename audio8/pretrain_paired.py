@@ -25,13 +25,12 @@ from eight_mile.pytorch.optz import *
 logger = logging.getLogger(__file__)
 
 
-
-
-def create_model(embeddings, audio_sr=16, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1,
+def create_model(embeddings, target_sample_rate, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1,
                  audio_d_ff=3072, audio_reduction_type='max', audio_d_k=64,
                  text_d_model=512, text_num_heads=8, text_num_layers=8, text_dropout=0.1, text_d_ff=2048, text_rpr_k=8,
                  text_reduction_type='max', text_d_k=64, stacking_layers=[],
                  output_dim=256, text_encoder_type='transformer', warmstart_text=None, **kwargs):
+    audio_sr = target_sample_rate//1000
     audio_encoder = Wav2Vec2PooledEncoder(conv_features=CONV_FEATURES[audio_sr], d_model=audio_d_model, num_heads=audio_num_heads,
                                           num_layers=audio_num_layers, dropout=audio_dropout, d_ff=audio_d_ff, reduction_type=audio_reduction_type, reduction_d_k=audio_d_k)
 
@@ -77,7 +76,6 @@ def train():
     parser.add_argument("--dataset_key", default="LibriSpeech",
                         help="dataset key for basedir")
     parser.add_argument("--grad_accum", type=int, default=1)
-    parser.add_argument("--audio_sr", type=int, choices=[8, 16], default=16)
     parser.add_argument("--audio_d_model", type=int, default=768, help="Audio model dimension (and embedding dsz)")
     parser.add_argument("--audio_d_ff", type=int, default=3072, help="FFN dimension")
     parser.add_argument("--audio_d_k", type=int, default=None, help="Reduction for audio pooling")
