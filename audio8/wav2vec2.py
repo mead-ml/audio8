@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import math
+from eight_mile.pytorch.serialize import load_tlm_npz
 from eight_mile.pytorch.layers import (pytorch_conv1d,
                                        pytorch_linear,
                                        Conv1DSame,
@@ -12,7 +13,9 @@ from eight_mile.pytorch.layers import (pytorch_conv1d,
                                        MaxPool1D,
                                        TwoHeadConcat,
                                        SingleHeadReduction,
+                                       BasicDualEncoderModel,
                                        sequence_mask_mxlen)
+from audio8.text import TextBoWPooledEncoder, TextTransformerPooledEncoder
 import contextlib
 from collections import namedtuple
 CONV_FEATURES = {16: [(512, 10, 5), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 2, 2), (512, 2, 2)],
@@ -212,6 +215,29 @@ def create_acoustic_model(num_labels, sample_rate, d_model, num_heads, num_layer
                                   dropout, d_ff)
     return model
 
+def create_paired_model(embeddings, target_sample_rate, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1,
+                 audio_d_ff=3072, audio_reduction_type='max', audio_d_k=64,
+                 text_d_model=512, text_num_heads=8, text_num_layers=8, text_dropout=0.1, text_d_ff=2048, text_rpr_k=8,
+                 text_reduction_type='max', text_d_k=64, stacking_layers=[],
+                 output_dim=256, text_encoder_type='transformer', warmstart_text=None, **kwargs):
+    audio_sr = target_sample_rate//1000
+    audio_encoder = Wav2Vec2PooledEncoder(conv_features=CONV_FEATURES[audio_sr], d_model=audio_d_model, num_heads=audio_num_heads,
+                                          num_layers=audio_num_layers, dropout=audio_dropout, d_ff=audio_d_ff, reduction_type=audio_reduction_type, reduction_d_k=audio_d_k)
+
+
+    if text_encoder_type == 'transformer':
+
+        text_encoder = TextTransformerPooledEncoder(embeddings, d_model=text_d_model, d_ff=text_d_ff,
+                                                    dropout=text_dropout, num_heads=text_num_heads, num_layers=text_num_layers,
+                                                    reduction_d_k=text_d_k, rpr_k=text_rpr_k, rpr_value_on=False, reduction_type=text_reduction_type)
+
+        if warmstart_text:
+            # Assume for now that its going to be an NPZ file
+            load_tlm_npz(text_encoder, warmstart_text)
+    else:
+        text_encoder = TextBoWPooledEncoder(embeddings, reduction_type=text_reduction_type)
+    de = BasicDualEncoderModel(audio_encoder, text_encoder, stacking_layers, output_dim)
+    return de
 
 class Wav2Vec2Loss(nn.Module):
     def __init__(self, n_vars, n_negatives=100):

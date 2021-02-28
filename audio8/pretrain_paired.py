@@ -11,7 +11,7 @@ import torch.nn as nn
 import random
 from audio8.data import AudioTextLetterDataset
 from audio8.text import BPEVectorizer, TextTransformerPooledEncoder, TextBoWPooledEncoder
-from audio8.wav2vec2 import Wav2Vec2PooledEncoder, load_fairseq_bin, CONV_FEATURES
+from audio8.wav2vec2 import create_paired_model
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from eight_mile.pytorch.serialize import load_tlm_npz
@@ -20,35 +20,12 @@ from baseline.pytorch.embeddings import *
 import baseline.embeddings
 from eight_mile.optz import *
 from eight_mile.utils import Offsets
-from eight_mile.pytorch.layers import save_checkpoint, init_distributed, BasicDualEncoderModel, find_latest_checkpoint
+from eight_mile.pytorch.layers import save_checkpoint, init_distributed, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
 logger = logging.getLogger(__file__)
 
 
-def create_model(embeddings, target_sample_rate, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1,
-                 audio_d_ff=3072, audio_reduction_type='max', audio_d_k=64,
-                 text_d_model=512, text_num_heads=8, text_num_layers=8, text_dropout=0.1, text_d_ff=2048, text_rpr_k=8,
-                 text_reduction_type='max', text_d_k=64, stacking_layers=[],
-                 output_dim=256, text_encoder_type='transformer', warmstart_text=None, **kwargs):
-    audio_sr = target_sample_rate//1000
-    audio_encoder = Wav2Vec2PooledEncoder(conv_features=CONV_FEATURES[audio_sr], d_model=audio_d_model, num_heads=audio_num_heads,
-                                          num_layers=audio_num_layers, dropout=audio_dropout, d_ff=audio_d_ff, reduction_type=audio_reduction_type, reduction_d_k=audio_d_k)
 
-
-    if text_encoder_type == 'transformer':
-
-        text_encoder = TextTransformerPooledEncoder(embeddings, d_model=text_d_model, d_ff=text_d_ff,
-                                                    dropout=text_dropout, num_heads=text_num_heads, num_layers=text_num_layers,
-                                                    reduction_d_k=text_d_k, rpr_k=text_rpr_k, rpr_value_on=False, reduction_type=text_reduction_type)
-
-        if warmstart_text:
-            # Assume for now that its going to be an NPZ file
-            logger.info("Warm-starting text encoder from NPZ file")
-            load_tlm_npz(text_encoder, warmstart_text)
-    else:
-        text_encoder = TextBoWPooledEncoder(embeddings, reduction_type=text_reduction_type)
-    de = BasicDualEncoderModel(audio_encoder, text_encoder, stacking_layers, output_dim)
-    return de
 
 def is_raw_checkpoint(checkpoint):
     if 'mask_emb' in checkpoint:
@@ -178,7 +155,7 @@ def train():
                                                        embed_file=args.warmstart_text if args.text_encoder_type == 'bow' else None)
 
     embeddings = preproc_data['embeddings']
-    model = create_model(embeddings, **vars(args)).to(args.device)
+    model = create_paired_model(embeddings, **vars(args)).to(args.device)
     print(model)
     loss_function = model.create_loss('symmetric').to(args.device)
     logger.info("Loaded model and loss")
