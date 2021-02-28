@@ -141,6 +141,13 @@ class AudioTextLetterDataset(IterableDataset):
     def _read_transcription(self, transcription):
         return transcription.split()
 
+    def get_or_unk_warn(self, t):
+        t = t.lower()
+        if t not in self.vec.vocab:
+            logger.warning('Word [%s] not in vocab', t)
+            return Offsets.UNK
+        return self.vec.vocab[t]
+
     def _read_tsv_file(self, tsv_file):
         self.files = []
         self.sizes = []
@@ -163,7 +170,7 @@ class AudioTextLetterDataset(IterableDataset):
                     # the assumption here is that if its BPE, the start and token are not part of the chunks
                     else:
                         tokens = [self.vec.vocab[t] for t in self.vec.internal.emit_begin_tok] + \
-                                 [self.vec.vocab.get(t, Offsets.UNK) for t in text] + \
+                                 [self.get_or_unk_warn(t) for t in text] + \
                                  [self.vec.vocab[t] for t in self.vec.internal.emit_end_tok]
                         tokens = np.array(tokens, dtype=np.int)
                     self.files.append(path)
