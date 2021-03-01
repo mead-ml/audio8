@@ -51,13 +51,9 @@ W2V_CTC_NESTED_MAP = {
 }
 
 # We use a primitive from 8mi called Dense which owns the linear as a sub-layer, so convert those
-W2V2_CTC_FLAT_MAP = {
+W2V2_CTC_FLAT_MAP_16 = {
     'w2v_encoder.w2v_model.post_extract_proj.weight': 'encoder.proj_to_input.layer.weight',
     'w2v_encoder.w2v_model.post_extract_proj.bias': 'encoder.proj_to_input.layer.bias',
-    #'w2v_encoder.w2v_model.project_q.weight': 'project_q.layer.weight',
-    #'w2v_encoder.w2v_model.project_q.bias': 'project_q.layer.bias',
-    #'w2v_encoder.w2v_model.final_proj.weight': 'final_proj.layer.weight',
-    #'w2v_encoder.w2v_model.final_proj.bias': 'final_proj.layer.bias',
     'w2v_encoder.w2v_model.encoder.layer_norm.weight': 'encoder.encoder.ln.weight',
     'w2v_encoder.w2v_model.encoder.layer_norm.bias': 'encoder.encoder.ln.bias',
     'w2v_encoder.w2v_model.encoder.pos_conv.0.bias': 'encoder.encoder.pos_conv.conv.1.bias',
@@ -77,8 +73,28 @@ W2V2_CTC_FLAT_MAP = {
     'w2v_encoder.w2v_model.layer_norm.bias': 'encoder.layer_norm.bias',
     'w2v_encoder.proj.weight': 'proj.weight',
     'w2v_encoder.proj.bias': 'proj.bias'
-    #'layer_norm.weight': 'encoder.ln.weight',
-    #'layer_norm.bias': 'encoder.ln.bias'
+}
+W2V2_CTC_FLAT_MAP_8 = {
+    'w2v_encoder.w2v_model.post_extract_proj.weight': 'encoder.proj_to_input.layer.weight',
+    'w2v_encoder.w2v_model.post_extract_proj.bias': 'encoder.proj_to_input.layer.bias',
+    'w2v_encoder.w2v_model.encoder.layer_norm.weight': 'encoder.encoder.ln.weight',
+    'w2v_encoder.w2v_model.encoder.layer_norm.bias': 'encoder.encoder.ln.bias',
+    'w2v_encoder.w2v_model.encoder.pos_conv.0.bias': 'encoder.encoder.pos_conv.conv.1.bias',
+    'w2v_encoder.w2v_model.encoder.pos_conv.0.weight_g': 'encoder.encoder.pos_conv.conv.1.weight_g',
+    'w2v_encoder.w2v_model.encoder.pos_conv.0.weight_v': 'encoder.encoder.pos_conv.conv.1.weight_v',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.0.0.weight': 'encoder.feature_extractor.conv_layers.0.0.weight',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.0.2.weight': 'encoder.feature_extractor.conv_layers.0.2.weight',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.0.2.bias': 'encoder.feature_extractor.conv_layers.0.2.bias',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.1.0.weight': 'encoder.feature_extractor.conv_layers.1.0.weight',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.2.0.weight': 'encoder.feature_extractor.conv_layers.2.0.weight',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.3.0.weight': 'encoder.feature_extractor.conv_layers.3.0.weight',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.4.0.weight': 'encoder.feature_extractor.conv_layers.4.0.weight',
+    'w2v_encoder.w2v_model.feature_extractor.conv_layers.5.0.weight': 'encoder.feature_extractor.conv_layers.5.0.weight',
+    'w2v_encoder.w2v_model.mask_emb': 'encoder.mask_emb',
+    'w2v_encoder.w2v_model.layer_norm.weight': 'encoder.layer_norm.weight',
+    'w2v_encoder.w2v_model.layer_norm.bias': 'encoder.layer_norm.bias',
+    'w2v_encoder.proj.weight': 'proj.weight',
+    'w2v_encoder.proj.bias': 'proj.bias'
 }
 
 
@@ -124,8 +140,13 @@ W2V2_FLAT_MAP = {
 }
 
 W2V_MAP = CheckpointMapping(nested=W2V_NESTED_MAP, flat=W2V2_FLAT_MAP)
-W2V_CTC_MAP = CheckpointMapping(nested=W2V_CTC_NESTED_MAP, flat=W2V2_CTC_FLAT_MAP)
+W2V_CTC_MAP_16 = CheckpointMapping(nested=W2V_CTC_NESTED_MAP, flat=W2V2_CTC_FLAT_MAP_16)
+W2V_CTC_MAP_8 = CheckpointMapping(nested=W2V_CTC_NESTED_MAP, flat=W2V2_CTC_FLAT_MAP_8)
 
+W2V_CTC_MAP = {
+    8: W2V_CTC_MAP_8,
+    16: W2V_CTC_MAP_16
+}
 
 
 def convert_keys(num_layers: int, d: Dict, nested_layer_map: Dict = W2V_MAP, flat_map: Dict = W2V2_FLAT_MAP) -> Dict:
@@ -144,10 +165,11 @@ def convert_keys(num_layers: int, d: Dict, nested_layer_map: Dict = W2V_MAP, fla
 
     return m
 
-def load_fairseq_bin(w2v: nn.Module, bin_file: str, ctc: bool=False):
+
+def load_fairseq_bin(w2v: nn.Module, bin_file: str, ctc: bool=False, sr: int = 16):
 
     if ctc:
-        checkpoint_mapping = W2V_CTC_MAP
+        checkpoint_mapping = W2V_CTC_MAP[sr]
         transformer = w2v.encoder.encoder.transformer
     else:
         checkpoint_mapping = W2V_MAP
