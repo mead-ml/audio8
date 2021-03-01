@@ -588,9 +588,9 @@ class Wav2Vec2Encoder(nn.Module):
 
 class Wav2Vec2AcousticModel(nn.Module):
     def __init__(self, num_labels, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.1,
-                 dropout_features=0.1):
+                 dropout_features=0.1, timestep_masking=True):
         super().__init__()
-        self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff, dropout_input, dropout_features)
+        self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff, dropout_input, dropout_features, timestep_masking)
         self.proj = pytorch_linear(d_model, num_labels)
         self.freeze = True
 
