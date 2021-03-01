@@ -167,7 +167,7 @@ def train():
             try:
                 unmapped = load_fairseq_bin(model.encoder, args.restart_from)
             except:
-                unmapped = load_fairseq_bin(model, args.restart_from, ctc=True)
+                unmapped = load_fairseq_bin(model, args.restart_from, ctc=True, sr=args.target_sample_rate//1000)
             print(unmapped)
             args.tick_type = None
         else:
