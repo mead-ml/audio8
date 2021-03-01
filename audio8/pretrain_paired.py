@@ -198,8 +198,10 @@ def train():
         logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
                     args.restart_from, global_step)
 
-    optimizer = OptimizerManager(model, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay)
-    logger.info("Model has {:,} parameters".format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
+    # For learned temperature, we need to pass the loss function in so that param is learnable.
+    # Since the loss_function owns the model, we can only pass it in
+    optimizer = OptimizerManager(loss_function, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay)
+    logger.info("Model has {:,} parameters".format(sum(p.numel() for p in loss_function.parameters() if p.requires_grad)))
 
     # Prepare model for distributed training if needed
     if args.distributed:
