@@ -16,7 +16,8 @@ parser.add_argument('--d_model', default=768, type=int)
 parser.add_argument("--num_vq_vars", type=int, default=320)
 parser.add_argument("--num_vq_groups", type=int, default=2)
 parser.add_argument("--final_dim", type=int, default=256)
-parser.add_argument('--d_ff', type=int)
+parser.add_argument("--d_ff", type=int)
+parser.add_argument("--target_sample_rate", type=int, default=16000)
 args = parser.parse_args()
 
 output_file = args.model.replace('.pt', '-a8.pth')
@@ -28,7 +29,7 @@ print(f"Write checkpoint to {output_file}")
 if args.ctc:
     vocab = read_vocab_file(args.vocab_file)
     model = Wav2Vec2AcousticModel(num_labels=len(vocab), d_model=args.d_model, num_heads=args.num_heads, num_layers=args.num_layers, d_ff=args.d_ff)
-    unmapped = load_fairseq_bin(model, args.model, ctc=True)
+    unmapped = load_fairseq_bin(model, args.model, ctc=True, sr=args.target_sample_rate//1000)
 
 
 else:

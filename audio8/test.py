@@ -6,7 +6,7 @@ import os
 from argparse import ArgumentParser
 from audio8.data import AudioTextLetterDataset
 from audio8.text import TextVectorizer, read_vocab_file
-from audio8.wav2vec2 import create_acoustic_model, load_fairseq_bin, W2V_CTC_MAP
+from audio8.wav2vec2 import create_acoustic_model, load_fairseq_bin
 from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Offsets, revlut
 from eight_mile.pytorch.layers import sequence_mask, find_latest_checkpoint
@@ -96,7 +96,7 @@ def evaluate():
     if not args.checkpoint:
         args.checkpoint = find_latest_checkpoint(args.basedir)
     if args.checkpoint.endswith('.pt'):
-        print(load_fairseq_bin(model, args.checkpoint, ctc=True))
+        print(load_fairseq_bin(model, args.checkpoint, ctc=True, sr=args.target_sample_rate//1000))
     else:
         model.load_state_dict(torch.load(args.checkpoint))
 
