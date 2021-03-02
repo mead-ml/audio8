@@ -239,6 +239,7 @@ def create_acoustic_model(num_labels, sample_rate, d_model, num_heads, num_layer
                                   dropout, d_ff, dropout_input, 0.0, timestep_masking, channel_masking)
     return model
 
+
 def create_paired_model(embeddings, target_sample_rate, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1,
                  audio_d_ff=3072, audio_reduction_type='max', audio_d_k=64,
                  text_d_model=512, text_num_heads=8, text_num_layers=8, text_dropout=0.1, text_d_ff=2048, text_rpr_k=8,
@@ -247,7 +248,6 @@ def create_paired_model(embeddings, target_sample_rate, audio_d_model=768, audio
     audio_sr = target_sample_rate//1000
     audio_encoder = Wav2Vec2PooledEncoder(conv_features=CONV_FEATURES[audio_sr], d_model=audio_d_model, num_heads=audio_num_heads,
                                           num_layers=audio_num_layers, dropout=audio_dropout, d_ff=audio_d_ff, reduction_type=audio_reduction_type, reduction_d_k=audio_d_k)
-
 
     if text_encoder_type == 'transformer':
 
@@ -262,6 +262,7 @@ def create_paired_model(embeddings, target_sample_rate, audio_d_model=768, audio
         text_encoder = TextBoWPooledEncoder(embeddings, reduction_type=text_reduction_type)
     de = BasicDualEncoderModel(audio_encoder, text_encoder, stacking_layers, output_dim)
     return de
+
 
 class Wav2Vec2Loss(nn.Module):
     def __init__(self, n_vars, n_negatives=100):
@@ -346,8 +347,7 @@ class ConvFeatureExtractionModel(nn.Module):
 
         for conv in self.conv_layers:
             x = conv(x)
-        # BxCxT -> BxTxC
-        #x = x.transpose(1, 2)
+
         return x
 
 
