@@ -224,15 +224,15 @@ def create_mask(
     return mask
 
 
-def create_model(sample_rate: int, num_vq_vars, num_vq_groups, d_model, num_heads, num_layers, dropout, d_ff):
+def create_model(sample_rate=16, num_vq_vars=320, num_vq_groups=2, d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, final_dim=256, dropout_input=0.1, dropout_features=0.1, timestep_masking=0.65, channel_masking=0.0, **kwargs):
     model = Wav2Vec2Model(CONV_FEATURES[sample_rate], num_vq_vars,
                           START_TEMP, END_TEMP, TEMP_DECAY_FACTOR, num_vq_groups, d_model,
                           num_heads, num_layers,
-                          dropout, d_ff)
+                          dropout, d_ff, final_dim, dropout_input, dropout_features, timestep_masking, channel_masking)
     return model
 
 
-def create_acoustic_model(num_labels, sample_rate, d_model, num_heads, num_layers, dropout, d_ff, dropout_input=0.0, timestep_masking=0.05, channel_masking=0.0016):
+def create_acoustic_model(num_labels, sample_rate=16, d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.0, timestep_masking=0.05, channel_masking=0.0016, **kwargs):
     model = Wav2Vec2AcousticModel(num_labels, CONV_FEATURES[sample_rate],
                                   d_model,
                                   num_heads, num_layers,
@@ -240,14 +240,16 @@ def create_acoustic_model(num_labels, sample_rate, d_model, num_heads, num_layer
     return model
 
 
-def create_paired_model(embeddings, target_sample_rate, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1,
+def create_paired_model(embeddings, target_sample_rate=16, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1,
                  audio_d_ff=3072, audio_reduction_type='max', audio_d_k=64,
+                 audio_dropout_input=0.0, audio_timestep_masking=0.05, audio_channel_masking=0.0016,
                  text_d_model=512, text_num_heads=8, text_num_layers=8, text_dropout=0.1, text_d_ff=2048, text_rpr_k=8,
                  text_reduction_type='max', text_d_k=64, stacking_layers=[],
                  output_dim=256, text_encoder_type='transformer', warmstart_text=None, **kwargs):
     audio_sr = target_sample_rate//1000
     audio_encoder = Wav2Vec2PooledEncoder(conv_features=CONV_FEATURES[audio_sr], d_model=audio_d_model, num_heads=audio_num_heads,
-                                          num_layers=audio_num_layers, dropout=audio_dropout, d_ff=audio_d_ff, reduction_type=audio_reduction_type, reduction_d_k=audio_d_k)
+                                          num_layers=audio_num_layers, dropout=audio_dropout, d_ff=audio_d_ff, reduction_type=audio_reduction_type, reduction_d_k=audio_d_k,
+                                          dropout_input=audio_dropout_input, timestep_masking=audio_timestep_masking, channel_masking=audio_channel_masking)
 
     if text_encoder_type == 'transformer':
 
