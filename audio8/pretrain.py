@@ -101,9 +101,7 @@ def train():
     valid_loader = DataLoader(valid_set, batch_size=None)
     logger.info("Loaded datasets")
 
-    model = create_model(args.target_sample_rate//1000, args.num_vq_vars, args.num_vq_groups, args.d_model, args.num_heads, args.num_layers,
-                         args.dropout, args.d_ff).to(args.device)
-
+    model = create_model(args.target_sample_rate//1000, **vars(args)).to(args.device)
     loss_function = create_loss(args.num_vq_vars * args.num_vq_groups, 100).to(args.device)
     logger.info("Loaded model and loss")
 

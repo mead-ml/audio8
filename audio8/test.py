@@ -90,8 +90,7 @@ def evaluate():
     logger.info("Loaded datasets")
 
     num_labels = len(vocab)
-    model = create_acoustic_model(num_labels, args.target_sample_rate//1000, args.d_model, args.num_heads, args.num_layers,
-                                  0.0, args.d_ff).to(args.device)
+    model = create_acoustic_model(num_labels, args.target_sample_rate//1000, **vars(args)).to(args.device)
 
     if not args.checkpoint:
         args.checkpoint = find_latest_checkpoint(args.basedir)

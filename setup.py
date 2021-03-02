@@ -36,6 +36,7 @@ def fix_links(text):
     text = regex.sub(r"[\1]({}\2)".format(About.DOC_URL), text)
     return text
 
+
 def read_doc(f_name, new_name=None, fix_fn=fix_links):
     """
     Because our readme is outside of this dir we need to copy it in so
@@ -50,6 +51,7 @@ def read_doc(f_name, new_name=None, fix_fn=fix_links):
         shutil.copyfile(doc_loc, new_loc)
     descript = open(new_loc, 'r').read()
     return fix_fn(descript)
+
 
 def main():
     setup(
@@ -72,18 +74,11 @@ def main():
             'six',
             'soundfile',
             'editdistance',
-            'mead-layers',
+            'mead-baseline',
         ],
         extras_require={
-            'test': ['pytest', 'mock', 'contextdecorator', 'pytest-forked', 'onnxruntime'],
-            'report': ['visdom', 'tensorboard'],
-            'yaml': ['pyyaml'],
-            'bpe': ['fastBPE'],
-            'bpex': ['fastBPE', 'subword-nmt'],
-            'tf2': ['tensorflow_addons'],
-            'grpc': ['grpc'],
-            'onnx': ['onnxruntime'],
-            'tfrecord': ['tfrecord']
+            'test': ['pytest', 'mock', 'contextdecorator', 'pytest-forked'],
+            'scipy': ['scipy']
         },
         entry_points={
             'console_scripts': [
@@ -104,6 +99,7 @@ def main():
         },
         keywords=['deep-learning', 'audio', 'pytorch'],
     )
+
 
 if __name__ == "__main__":
     main()

@@ -145,8 +145,7 @@ def train():
     logger.info("Loaded datasets")
 
     num_labels = len(vocab)
-    model = create_acoustic_model(num_labels, args.target_sample_rate//1000, args.d_model, args.num_heads, args.num_layers,
-                                  args.dropout, args.d_ff).to(args.device)
+    model = create_acoustic_model(num_labels, args.target_sample_rate//1000, **vars(args)).to(args.device)
 
     loss_function = CTCLoss().to(args.device)
     logger.info("Loaded model and loss")
