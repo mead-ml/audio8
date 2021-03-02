@@ -184,7 +184,7 @@ def load_fairseq_bin(w2v: nn.Module, bin_file: str, ctc: bool=False, sr: int = 1
     return {'missing': missing_keys, 'unexpected': unknown_keys.unexpected_keys}
 
 
-def timestep_masking(
+def create_mask(
         shape: Tuple[int, int],
         p_start: float = 0.65,
         mask_length: int = 10
@@ -192,6 +192,8 @@ def timestep_masking(
     bsz, input_length = shape
     mask = np.full((bsz, input_length), False)
     num_mask = int(p_start * input_length / float(mask_length) + np.random.rand())
+    if num_mask == 0:
+        return mask
     mask_idcs = []
     for i in range(bsz):
         sz = input_length
@@ -230,11 +232,11 @@ def create_model(sample_rate: int, num_vq_vars, num_vq_groups, d_model, num_head
     return model
 
 
-def create_acoustic_model(num_labels, sample_rate, d_model, num_heads, num_layers, dropout, d_ff):
+def create_acoustic_model(num_labels, sample_rate, d_model, num_heads, num_layers, dropout, d_ff, dropout_input=0.0, timestep_masking=0.05, channel_masking=0.0016):
     model = Wav2Vec2AcousticModel(num_labels, CONV_FEATURES[sample_rate],
                                   d_model,
                                   num_heads, num_layers,
-                                  dropout, d_ff)
+                                  dropout, d_ff, dropout_input, 0.0, timestep_masking, channel_masking)
     return model
 
 def create_paired_model(embeddings, target_sample_rate, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1,
@@ -394,7 +396,6 @@ class GumbelVectorQuantizer(nn.Module):
         self.min_temperature = min_temperature
         self.temperature_decay = temperature_decay
         self.curr_temperature = self.max_temperature
-        # Why dont they init this, I guess because its not necessarily used in training
         self.codebook_indices = None
 
     def set_num_updates(self, num_updates):
@@ -567,7 +568,9 @@ class Wav2Vec2Encoder(nn.Module):
 
 
     """
-    def __init__(self, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.1, dropout_features=0.1, do_timestep_masking=False):
+    def __init__(self, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1,
+                 d_ff=None, dropout_input=0.1, dropout_features=0.0,
+                 timestep_masking=0.05, channel_masking=0.0016):
         super().__init__()
         fx_dsz = conv_features[-1][0]
         self.layer_norm = torch.nn.LayerNorm(fx_dsz)
@@ -580,7 +583,8 @@ class Wav2Vec2Encoder(nn.Module):
         self.mask_emb = nn.Parameter(
             torch.FloatTensor(d_model).uniform_()
         )
-        self.do_timestep_masking = do_timestep_masking
+        self.timestep_masking = timestep_masking
+        self.channel_masking = channel_masking
         self.output_dim = d_model
 
     def forward(self, x, pad_mask=None):
@@ -596,23 +600,27 @@ class Wav2Vec2Encoder(nn.Module):
             pad_mask = pad_mask.view(pad_mask.size(0), features.size(1), -1)
             pad_mask = pad_mask.all(-1)
 
-        B, T, _ = features.shape
         features = self.proj_to_input(features)
+        B, T, C = features.shape
 
-        if self.do_timestep_masking:
-            features = self.dropout_input(features)
-            time_mask = timestep_masking((B, T))
+        features = self.dropout_input(features)
+        if self.timestep_masking > 0.0:
+            time_mask = create_mask((B, T), p_start=self.timestep_masking)
             time_mask = torch.from_numpy(time_mask).to(x.device)
             features[time_mask] = self.mask_emb
+        if self.channel_masking > 0.0:
+            channel_mask = create_mask((B, C), p_start=self.channel_masking)
+            channel_mask = torch.from_numpy(channel_mask).to(x.device).unsqueeze(1).expand(-1, T, -1)
+            features[channel_mask] = 0
         x = self.encoder(features, pad_mask)
         return x, pad_mask
 
 
 class Wav2Vec2AcousticModel(nn.Module):
-    def __init__(self, num_labels, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.1,
-                 dropout_features=0.1, timestep_masking=True):
+    def __init__(self, num_labels, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.0,
+                 dropout_features=0.0, timestep_masking=0.05, channel_masking=0.0016):
         super().__init__()
-        self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff, dropout_input, dropout_features, timestep_masking)
+        self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff, dropout_input, dropout_features, timestep_masking, channel_masking)
         self.proj = pytorch_linear(d_model, num_labels)
         self.freeze = True
 
@@ -625,10 +633,10 @@ class Wav2Vec2AcousticModel(nn.Module):
 
 
 class Wav2Vec2PooledEncoder(nn.Module):
-    def __init__(self, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.1,
-                 dropout_features=0.1, reduction_type='SHA', reduction_d_k=64):
+    def __init__(self, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.0,
+                 dropout_features=0.0, timestep_masking=0.05, channel_masking=0.0016, reduction_type='SHA', reduction_d_k=64):
         super().__init__()
-        self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff, dropout_input, dropout_features)
+        self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff, dropout_input, dropout_features, timestep_masking, channel_masking)
         self.output_dim = self.encoder.output_dim
         reduction_type = reduction_type.lower()
         if reduction_type == "2ha":
@@ -673,7 +681,7 @@ class Wav2Vec2Model(nn.Module):
     """
     def __init__(self, conv_features=CONV_FEATURES[16], num_vq_vars=320, start_temp=START_TEMP, end_temp=END_TEMP, temp_decay_factor=TEMP_DECAY_FACTOR,
                  num_vq_groups=2, d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, final_dim=256,
-                 dropout_input=0.1, dropout_features=0.1):
+                 dropout_input=0.1, dropout_features=0.1, timestep_masking=0.65, channel_masking=0.0):
         super().__init__()
         fx_dsz = conv_features[-1][0]
         self.layer_norm = torch.nn.LayerNorm(fx_dsz)
@@ -687,6 +695,8 @@ class Wav2Vec2Model(nn.Module):
         self.encoder = AudioTransformerEncoder(num_heads, d_model, dropout, num_layers, d_ff=d_ff)
         self.project_q = Dense(final_dim, final_dim)
         self.final_proj = Dense(d_model, final_dim)
+        self.timestep_masking = timestep_masking
+        self.channel_masking = channel_masking
         self.mask_emb = nn.Parameter(
             torch.FloatTensor(d_model).uniform_()
         )
@@ -700,12 +710,18 @@ class Wav2Vec2Model(nn.Module):
         features = self.layer_norm(fx)
         unmasked_features = features.clone()
         features = self.proj_to_input(features)
-        B, T, _ = unmasked_features.shape
+        B, T, C = unmasked_features.shape
         features = self.dropout_input(features)
         unmasked_features = self.dropout_features(unmasked_features)
-        time_mask = timestep_masking((B, T))
+
+        time_mask = create_mask((B, T), p_start=self.timestep_masking)
         time_mask = torch.from_numpy(time_mask).to(x.device)
         features[time_mask] = self.mask_emb
+
+        if self.channel_masking > 0.0:
+            channel_mask = create_mask((B, C), p_start=self.channel_masking)
+            channel_mask = torch.from_numpy(channel_mask).to(x.device).unsqueeze(1).view(-1, T, -1)
+            features[channel_mask] = 0
 
         y = unmasked_features[time_mask].view(
             unmasked_features.size(0), -1, unmasked_features.size(-1)
