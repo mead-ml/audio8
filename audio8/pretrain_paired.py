@@ -95,6 +95,10 @@ def train():
     parser.add_argument("--steps_per_update", type=int, default=100)
     parser.add_argument("--steps_per_checkpoint", type=int, default=1000, help="The number of steps per checkpoint")
     parser.add_argument("--verbose", type=str2bool, help="Verbose", default=False)
+    parser.add_argument("--learn_temp", type=str2bool, default=True,
+                        help="Should we learn the temperature scaling")
+    parser.add_argument("--init_temp", type=float, default=1.0,
+                        help="Initialize the temperature")
     parser.add_argument("--device", type=str,
                         default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")
@@ -156,8 +160,8 @@ def train():
 
     embeddings = preproc_data['embeddings']
     model = create_paired_model(embeddings, **vars(args)).to(args.device)
-    print(model)
-    loss_function = model.create_loss('symmetric').to(args.device)
+    logger.info(f"init temperature: {args.init_temp}, learnable: {args.learn_temp}")
+    loss_function = model.create_loss('symmetric', init_temp=args.init_temp, learn_temp=args.learn_temp).to(args.device)
     logger.info("Loaded model and loss")
 
     update_on = args.steps_per_checkpoint
@@ -198,8 +202,10 @@ def train():
         logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
                     args.restart_from, global_step)
 
-    optimizer = OptimizerManager(model, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay)
-    logger.info("Model has {:,} parameters".format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
+    # For learned temperature, we need to pass the loss function in so that param is learnable.
+    # Since the loss_function owns the model, we can only pass it in
+    optimizer = OptimizerManager(loss_function, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay)
+    logger.info("Model has {:,} parameters".format(sum(p.numel() for p in loss_function.parameters() if p.requires_grad)))
 
     # Prepare model for distributed training if needed
     if args.distributed:
