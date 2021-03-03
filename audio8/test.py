@@ -49,8 +49,7 @@ def evaluate():
     parser.add_argument("--checkpoint")
     parser.add_argument("--valid_dataset", type=str, help='Dataset (by name), e.g. dev-other')
     parser.add_argument("--dict_file", type=str, help="Dictionary file", default='dict.ltr.txt')
-    parser.add_argument("--dataset_key", default="LibriSpeech",
-                        help="dataset key for basedir")
+    parser.add_argument("--dataset_key", default="LibriSpeech", help="dataset key for basedir")
     parser.add_argument("--input_sample_rate", type=int, default=16_000)
     parser.add_argument("--target_sample_rate", type=int, default=16_000)
     parser.add_argument("--d_model", type=int, default=768, help="Model dimension (and embedding dsz)")
@@ -59,16 +58,18 @@ def evaluate():
     parser.add_argument("--num_heads", type=int, default=12, help="Number of heads")
     parser.add_argument("--num_layers", type=int, default=12, help="Number of layers")
     parser.add_argument("--max_sample_len", type=int, default=325_000, help="Max sample length")
-    parser.add_argument("--restart_tt", type=str, help="Optional param for legacy checkpoints", choices=['step', 'epoch', 'ignore'])
+    parser.add_argument(
+        "--restart_tt", type=str, help="Optional param for legacy checkpoints", choices=['step', 'epoch', 'ignore']
+    )
     parser.add_argument("--restart_from", type=str, help="Option allows you to restart from a previous checkpoint")
     parser.add_argument("--model_type", default="wav2vec2")
     parser.add_argument("--verbose", type=str2bool, help="Verbose", default=False)
     parser.add_argument("--valid_steps", type=int, help="Num valid steps to evaluate", default=40_000)
     parser.add_argument("--steps_per_update", type=int, default=100)
     parser.add_argument("--steps_per_checkpoint", type=int, default=1000, help="The number of steps per checkpoint")
-    parser.add_argument("--device", type=str,
-                        default="cuda" if torch.cuda.is_available() else "cpu",
-                        help="Device (cuda or cpu)")
+    parser.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)"
+    )
     parser.add_argument("--vocab_file", help="Vocab for output decoding")
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
 
@@ -82,20 +83,26 @@ def evaluate():
     index2vocab = revlut(vocab)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
-    valid_set = AudioTextLetterDataset(valid_dataset, vec, args.target_tokens_per_batch, args.max_sample_len,
-                                       input_sample_rate=args.input_sample_rate,
-                                       target_sample_rate=args.target_sample_rate,
-                                       distribute=False, shuffle=False)
+    valid_set = AudioTextLetterDataset(
+        valid_dataset,
+        vec,
+        args.target_tokens_per_batch,
+        args.max_sample_len,
+        input_sample_rate=args.input_sample_rate,
+        target_sample_rate=args.target_sample_rate,
+        distribute=False,
+        shuffle=False,
+    )
     valid_loader = DataLoader(valid_set, batch_size=None)
     logger.info("Loaded datasets")
 
     num_labels = len(vocab)
-    model = create_acoustic_model(num_labels, args.target_sample_rate//1000, **vars(args)).to(args.device)
+    model = create_acoustic_model(num_labels, args.target_sample_rate // 1000, **vars(args)).to(args.device)
 
     if not args.checkpoint:
         args.checkpoint = find_latest_checkpoint(args.basedir)
     if args.checkpoint.endswith('.pt'):
-        print(load_fairseq_bin(model, args.checkpoint, ctc=True, sr=args.target_sample_rate//1000))
+        print(load_fairseq_bin(model, args.checkpoint, ctc=True, sr=args.target_sample_rate // 1000))
     else:
         model.load_state_dict(torch.load(args.checkpoint))
 

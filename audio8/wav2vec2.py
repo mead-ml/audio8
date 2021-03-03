@@ -5,21 +5,26 @@ import torch.nn.functional as F
 import numpy as np
 import math
 from eight_mile.pytorch.serialize import load_tlm_npz
-from eight_mile.pytorch.layers import (pytorch_conv1d,
-                                       pytorch_linear,
-                                       Conv1DSame,
-                                       TransformerEncoderStack,
-                                       Dense,
-                                       MaxPool1D,
-                                       TwoHeadConcat,
-                                       SingleHeadReduction,
-                                       BasicDualEncoderModel,
-                                       sequence_mask_mxlen)
+from eight_mile.pytorch.layers import (
+    pytorch_conv1d,
+    pytorch_linear,
+    Conv1DSame,
+    TransformerEncoderStack,
+    Dense,
+    MaxPool1D,
+    TwoHeadConcat,
+    SingleHeadReduction,
+    BasicDualEncoderModel,
+    sequence_mask_mxlen,
+)
 from audio8.text import TextBoWPooledEncoder, TextTransformerPooledEncoder
 import contextlib
 from collections import namedtuple
-CONV_FEATURES = {16: [(512, 10, 5), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 2, 2), (512, 2, 2)],
-                 8: [(512, 10, 5), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 2, 2), (512, 2, 2)]}
+
+CONV_FEATURES = {
+    16: [(512, 10, 5), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 2, 2), (512, 2, 2)],
+    8: [(512, 10, 5), (512, 3, 2), (512, 3, 2), (512, 3, 2), (512, 2, 2), (512, 2, 2)],
+}
 
 START_TEMP = 2
 END_TEMP = 0.5
@@ -30,24 +35,23 @@ DIVERSITY_WGT = 10
 
 # Transfer fairseq keys to audio8
 W2V_CTC_NESTED_MAP = {
-    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.k_proj.weight':     'encoder.encoder.transformer.encoders.{}.self_attn.w_K.layer.weight',
-    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.k_proj.bias':       'encoder.encoder.transformer.encoders.{}.self_attn.w_K.layer.bias',
-    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.v_proj.weight':     'encoder.encoder.transformer.encoders.{}.self_attn.w_V.layer.weight',
-    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.v_proj.bias':       'encoder.encoder.transformer.encoders.{}.self_attn.w_V.layer.bias',
-    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.q_proj.weight':     'encoder.encoder.transformer.encoders.{}.self_attn.w_Q.layer.weight',
-    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.q_proj.bias':       'encoder.encoder.transformer.encoders.{}.self_attn.w_Q.layer.bias',
-    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.out_proj.weight':   'encoder.encoder.transformer.encoders.{}.self_attn.w_O.layer.weight',
-    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.out_proj.bias':     'encoder.encoder.transformer.encoders.{}.self_attn.w_O.layer.bias',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.k_proj.weight': 'encoder.encoder.transformer.encoders.{}.self_attn.w_K.layer.weight',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.k_proj.bias': 'encoder.encoder.transformer.encoders.{}.self_attn.w_K.layer.bias',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.v_proj.weight': 'encoder.encoder.transformer.encoders.{}.self_attn.w_V.layer.weight',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.v_proj.bias': 'encoder.encoder.transformer.encoders.{}.self_attn.w_V.layer.bias',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.q_proj.weight': 'encoder.encoder.transformer.encoders.{}.self_attn.w_Q.layer.weight',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.q_proj.bias': 'encoder.encoder.transformer.encoders.{}.self_attn.w_Q.layer.bias',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.out_proj.weight': 'encoder.encoder.transformer.encoders.{}.self_attn.w_O.layer.weight',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn.out_proj.bias': 'encoder.encoder.transformer.encoders.{}.self_attn.w_O.layer.bias',
     # Wav2vec2 ref impl is run with LN first
     'w2v_encoder.w2v_model.encoder.layers.{}.self_attn_layer_norm.weight': 'encoder.encoder.transformer.encoders.{}.ln2.weight',
-    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn_layer_norm.bias':   'encoder.encoder.transformer.encoders.{}.ln2.bias',
+    'w2v_encoder.w2v_model.encoder.layers.{}.self_attn_layer_norm.bias': 'encoder.encoder.transformer.encoders.{}.ln2.bias',
     'w2v_encoder.w2v_model.encoder.layers.{}.fc1.weight': 'encoder.encoder.transformer.encoders.{}.ffn.0.layer.weight',
-    'w2v_encoder.w2v_model.encoder.layers.{}.fc1.bias':   'encoder.encoder.transformer.encoders.{}.ffn.0.layer.bias',
+    'w2v_encoder.w2v_model.encoder.layers.{}.fc1.bias': 'encoder.encoder.transformer.encoders.{}.ffn.0.layer.bias',
     'w2v_encoder.w2v_model.encoder.layers.{}.fc2.weight': 'encoder.encoder.transformer.encoders.{}.ffn.3.layer.weight',
-    'w2v_encoder.w2v_model.encoder.layers.{}.fc2.bias':   'encoder.encoder.transformer.encoders.{}.ffn.3.layer.bias',
-    'w2v_encoder.w2v_model.encoder.layers.{}.final_layer_norm.weight':  'encoder.encoder.transformer.encoders.{}.ln1.weight',
-    'w2v_encoder.w2v_model.encoder.layers.{}.final_layer_norm.bias':   'encoder.encoder.transformer.encoders.{}.ln1.bias'
-
+    'w2v_encoder.w2v_model.encoder.layers.{}.fc2.bias': 'encoder.encoder.transformer.encoders.{}.ffn.3.layer.bias',
+    'w2v_encoder.w2v_model.encoder.layers.{}.final_layer_norm.weight': 'encoder.encoder.transformer.encoders.{}.ln1.weight',
+    'w2v_encoder.w2v_model.encoder.layers.{}.final_layer_norm.bias': 'encoder.encoder.transformer.encoders.{}.ln1.bias',
 }
 
 # We use a primitive from 8mi called Dense which owns the linear as a sub-layer, so convert those
@@ -72,7 +76,7 @@ W2V2_CTC_FLAT_MAP_16 = {
     'w2v_encoder.w2v_model.layer_norm.weight': 'encoder.layer_norm.weight',
     'w2v_encoder.w2v_model.layer_norm.bias': 'encoder.layer_norm.bias',
     'w2v_encoder.proj.weight': 'proj.weight',
-    'w2v_encoder.proj.bias': 'proj.bias'
+    'w2v_encoder.proj.bias': 'proj.bias',
 }
 W2V2_CTC_FLAT_MAP_8 = {
     'w2v_encoder.w2v_model.post_extract_proj.weight': 'encoder.proj_to_input.layer.weight',
@@ -94,32 +98,31 @@ W2V2_CTC_FLAT_MAP_8 = {
     'w2v_encoder.w2v_model.layer_norm.weight': 'encoder.layer_norm.weight',
     'w2v_encoder.w2v_model.layer_norm.bias': 'encoder.layer_norm.bias',
     'w2v_encoder.proj.weight': 'proj.weight',
-    'w2v_encoder.proj.bias': 'proj.bias'
+    'w2v_encoder.proj.bias': 'proj.bias',
 }
 
 
 CheckpointMapping = namedtuple('CheckpointMapping', ['nested', 'flat'])
 
 W2V_NESTED_MAP = {
-        'encoder.layers.{}.self_attn.k_proj.weight':     'encoder.transformer.encoders.{}.self_attn.w_K.layer.weight',
-        'encoder.layers.{}.self_attn.k_proj.bias':       'encoder.transformer.encoders.{}.self_attn.w_K.layer.bias',
-        'encoder.layers.{}.self_attn.v_proj.weight':     'encoder.transformer.encoders.{}.self_attn.w_V.layer.weight',
-        'encoder.layers.{}.self_attn.v_proj.bias':       'encoder.transformer.encoders.{}.self_attn.w_V.layer.bias',
-        'encoder.layers.{}.self_attn.q_proj.weight':     'encoder.transformer.encoders.{}.self_attn.w_Q.layer.weight',
-        'encoder.layers.{}.self_attn.q_proj.bias':       'encoder.transformer.encoders.{}.self_attn.w_Q.layer.bias',
-        'encoder.layers.{}.self_attn.out_proj.weight':   'encoder.transformer.encoders.{}.self_attn.w_O.layer.weight',
-        'encoder.layers.{}.self_attn.out_proj.bias':     'encoder.transformer.encoders.{}.self_attn.w_O.layer.bias',
-        # Wav2vec2 ref impl is run with LN first
-        'encoder.layers.{}.self_attn_layer_norm.weight': 'encoder.transformer.encoders.{}.ln2.weight',
-        'encoder.layers.{}.self_attn_layer_norm.bias':   'encoder.transformer.encoders.{}.ln2.bias',
-        'encoder.layers.{}.fc1.weight': 'encoder.transformer.encoders.{}.ffn.0.layer.weight',
-        'encoder.layers.{}.fc1.bias':   'encoder.transformer.encoders.{}.ffn.0.layer.bias',
-        'encoder.layers.{}.fc2.weight': 'encoder.transformer.encoders.{}.ffn.3.layer.weight',
-        'encoder.layers.{}.fc2.bias':   'encoder.transformer.encoders.{}.ffn.3.layer.bias',
-        'encoder.layers.{}.final_layer_norm.weight':  'encoder.transformer.encoders.{}.ln1.weight',
-        'encoder.layers.{}.final_layer_norm.bias':   'encoder.transformer.encoders.{}.ln1.bias'
-
-    }
+    'encoder.layers.{}.self_attn.k_proj.weight': 'encoder.transformer.encoders.{}.self_attn.w_K.layer.weight',
+    'encoder.layers.{}.self_attn.k_proj.bias': 'encoder.transformer.encoders.{}.self_attn.w_K.layer.bias',
+    'encoder.layers.{}.self_attn.v_proj.weight': 'encoder.transformer.encoders.{}.self_attn.w_V.layer.weight',
+    'encoder.layers.{}.self_attn.v_proj.bias': 'encoder.transformer.encoders.{}.self_attn.w_V.layer.bias',
+    'encoder.layers.{}.self_attn.q_proj.weight': 'encoder.transformer.encoders.{}.self_attn.w_Q.layer.weight',
+    'encoder.layers.{}.self_attn.q_proj.bias': 'encoder.transformer.encoders.{}.self_attn.w_Q.layer.bias',
+    'encoder.layers.{}.self_attn.out_proj.weight': 'encoder.transformer.encoders.{}.self_attn.w_O.layer.weight',
+    'encoder.layers.{}.self_attn.out_proj.bias': 'encoder.transformer.encoders.{}.self_attn.w_O.layer.bias',
+    # Wav2vec2 ref impl is run with LN first
+    'encoder.layers.{}.self_attn_layer_norm.weight': 'encoder.transformer.encoders.{}.ln2.weight',
+    'encoder.layers.{}.self_attn_layer_norm.bias': 'encoder.transformer.encoders.{}.ln2.bias',
+    'encoder.layers.{}.fc1.weight': 'encoder.transformer.encoders.{}.ffn.0.layer.weight',
+    'encoder.layers.{}.fc1.bias': 'encoder.transformer.encoders.{}.ffn.0.layer.bias',
+    'encoder.layers.{}.fc2.weight': 'encoder.transformer.encoders.{}.ffn.3.layer.weight',
+    'encoder.layers.{}.fc2.bias': 'encoder.transformer.encoders.{}.ffn.3.layer.bias',
+    'encoder.layers.{}.final_layer_norm.weight': 'encoder.transformer.encoders.{}.ln1.weight',
+    'encoder.layers.{}.final_layer_norm.bias': 'encoder.transformer.encoders.{}.ln1.bias',
+}
 
 
 # We use a primitive from 8mi called Dense which owns the linear as a sub-layer, so convert those
@@ -143,10 +146,7 @@ W2V_MAP = CheckpointMapping(nested=W2V_NESTED_MAP, flat=W2V2_FLAT_MAP)
 W2V_CTC_MAP_16 = CheckpointMapping(nested=W2V_CTC_NESTED_MAP, flat=W2V2_CTC_FLAT_MAP_16)
 W2V_CTC_MAP_8 = CheckpointMapping(nested=W2V_CTC_NESTED_MAP, flat=W2V2_CTC_FLAT_MAP_8)
 
-W2V_CTC_MAP = {
-    8: W2V_CTC_MAP_8,
-    16: W2V_CTC_MAP_16
-}
+W2V_CTC_MAP = {8: W2V_CTC_MAP_8, 16: W2V_CTC_MAP_16}
 
 
 def convert_keys(num_layers: int, d: Dict, nested_layer_map: Dict = W2V_MAP, flat_map: Dict = W2V2_FLAT_MAP) -> Dict:
@@ -166,7 +166,7 @@ def convert_keys(num_layers: int, d: Dict, nested_layer_map: Dict = W2V_MAP, fla
     return m
 
 
-def load_fairseq_bin(w2v: nn.Module, bin_file: str, ctc: bool=False, sr: int = 16):
+def load_fairseq_bin(w2v: nn.Module, bin_file: str, ctc: bool = False, sr: int = 16):
 
     if ctc:
         checkpoint_mapping = W2V_CTC_MAP[sr]
@@ -184,11 +184,7 @@ def load_fairseq_bin(w2v: nn.Module, bin_file: str, ctc: bool=False, sr: int = 1
     return {'missing': missing_keys, 'unexpected': unknown_keys.unexpected_keys}
 
 
-def create_mask(
-        shape: Tuple[int, int],
-        p_start: float = 0.65,
-        mask_length: int = 10
-) -> np.ndarray:
+def create_mask(shape: Tuple[int, int], p_start: float = 0.65, mask_length: int = 10) -> np.ndarray:
     bsz, input_length = shape
     mask = np.full((bsz, input_length), False)
     num_mask = int(p_start * input_length / float(mask_length) + np.random.rand())
@@ -204,13 +200,7 @@ def create_mask(
 
         mask_idc = np.random.choice(sz - min_len, num_mask, replace=False)
 
-        mask_idc = np.asarray(
-            [
-                mask_idc[j] + offset
-                for j in range(len(mask_idc))
-                for offset in range(lengths[j])
-            ]
-        )
+        mask_idc = np.asarray([mask_idc[j] + offset for j in range(len(mask_idc)) for offset in range(lengths[j])])
 
         mask_idcs.append(np.unique(mask_idc[mask_idc < sz]))
 
@@ -224,42 +214,140 @@ def create_mask(
     return mask
 
 
-def create_model(sample_rate=16, num_vq_vars=320, num_vq_groups=2, d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, final_dim=256, dropout_input=0.1, dropout_features=0.1, timestep_masking=0.65, channel_masking=0.0, timestep_mask_len=10, channel_mask_len=64, **kwargs):
-    model = Wav2Vec2Model(CONV_FEATURES[sample_rate], num_vq_vars,
-                          START_TEMP, END_TEMP, TEMP_DECAY_FACTOR, num_vq_groups, d_model,
-                          num_heads, num_layers,
-                          dropout, d_ff, final_dim, dropout_input, dropout_features, timestep_masking, channel_masking, timestep_mask_len, channel_mask_len)
+def create_model(
+    sample_rate=16,
+    num_vq_vars=320,
+    num_vq_groups=2,
+    d_model=768,
+    num_heads=12,
+    num_layers=12,
+    dropout=0.1,
+    d_ff=None,
+    final_dim=256,
+    dropout_input=0.1,
+    dropout_features=0.1,
+    timestep_masking=0.65,
+    channel_masking=0.0,
+    timestep_mask_len=10,
+    channel_mask_len=64,
+    **kwargs,
+):
+    model = Wav2Vec2Model(
+        CONV_FEATURES[sample_rate],
+        num_vq_vars,
+        START_TEMP,
+        END_TEMP,
+        TEMP_DECAY_FACTOR,
+        num_vq_groups,
+        d_model,
+        num_heads,
+        num_layers,
+        dropout,
+        d_ff,
+        final_dim,
+        dropout_input,
+        dropout_features,
+        timestep_masking,
+        channel_masking,
+        timestep_mask_len,
+        channel_mask_len,
+    )
     return model
 
 
-def create_acoustic_model(num_labels, sample_rate=16, d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.0, timestep_masking=0.5, channel_masking=0.1, timestep_mask_len=10, channel_mask_len=64, **kwargs):
-    model = Wav2Vec2AcousticModel(num_labels, CONV_FEATURES[sample_rate],
-                                  d_model,
-                                  num_heads, num_layers,
-                                  dropout, d_ff, dropout_input, 0.0,
-                                  timestep_masking, channel_masking,
-                                  timestep_mask_len, channel_mask_len)
+def create_acoustic_model(
+    num_labels,
+    sample_rate=16,
+    d_model=768,
+    num_heads=12,
+    num_layers=12,
+    dropout=0.1,
+    d_ff=None,
+    dropout_input=0.0,
+    timestep_masking=0.5,
+    channel_masking=0.1,
+    timestep_mask_len=10,
+    channel_mask_len=64,
+    **kwargs,
+):
+    model = Wav2Vec2AcousticModel(
+        num_labels,
+        CONV_FEATURES[sample_rate],
+        d_model,
+        num_heads,
+        num_layers,
+        dropout,
+        d_ff,
+        dropout_input,
+        0.0,
+        timestep_masking,
+        channel_masking,
+        timestep_mask_len,
+        channel_mask_len,
+    )
     return model
 
 
-def create_paired_model(embeddings, target_sample_rate=16, audio_d_model=768, audio_num_heads=12, audio_num_layers=12, audio_dropout=0.1,
-                 audio_d_ff=3072, audio_reduction_type='max', audio_d_k=64,
-                 audio_dropout_input=0.0, audio_timestep_masking=0.5, audio_channel_masking=0.1,
-                 audio_timestep_mask_len=10, audio_channel_mask_len=64,
-                 text_d_model=512, text_num_heads=8, text_num_layers=8, text_dropout=0.1, text_d_ff=2048, text_rpr_k=8,
-                 text_reduction_type='max', text_d_k=64, stacking_layers=[],
-                 output_dim=256, text_encoder_type='transformer', warmstart_text=None, **kwargs):
-    audio_sr = target_sample_rate//1000
-    audio_encoder = Wav2Vec2PooledEncoder(conv_features=CONV_FEATURES[audio_sr], d_model=audio_d_model, num_heads=audio_num_heads,
-                                          num_layers=audio_num_layers, dropout=audio_dropout, d_ff=audio_d_ff, reduction_type=audio_reduction_type, reduction_d_k=audio_d_k,
-                                          dropout_input=audio_dropout_input, timestep_masking=audio_timestep_masking, channel_masking=audio_channel_masking,
-                                          timestep_mask_len=audio_timestep_mask_len, channel_mask_len=audio_channel_mask_len)
+def create_paired_model(
+    embeddings,
+    target_sample_rate=16,
+    audio_d_model=768,
+    audio_num_heads=12,
+    audio_num_layers=12,
+    audio_dropout=0.1,
+    audio_d_ff=3072,
+    audio_reduction_type='max',
+    audio_d_k=64,
+    audio_dropout_input=0.0,
+    audio_timestep_masking=0.5,
+    audio_channel_masking=0.1,
+    audio_timestep_mask_len=10,
+    audio_channel_mask_len=64,
+    text_d_model=512,
+    text_num_heads=8,
+    text_num_layers=8,
+    text_dropout=0.1,
+    text_d_ff=2048,
+    text_rpr_k=8,
+    text_reduction_type='max',
+    text_d_k=64,
+    stacking_layers=[],
+    output_dim=256,
+    text_encoder_type='transformer',
+    warmstart_text=None,
+    **kwargs,
+):
+    audio_sr = target_sample_rate // 1000
+    audio_encoder = Wav2Vec2PooledEncoder(
+        conv_features=CONV_FEATURES[audio_sr],
+        d_model=audio_d_model,
+        num_heads=audio_num_heads,
+        num_layers=audio_num_layers,
+        dropout=audio_dropout,
+        d_ff=audio_d_ff,
+        reduction_type=audio_reduction_type,
+        reduction_d_k=audio_d_k,
+        dropout_input=audio_dropout_input,
+        timestep_masking=audio_timestep_masking,
+        channel_masking=audio_channel_masking,
+        timestep_mask_len=audio_timestep_mask_len,
+        channel_mask_len=audio_channel_mask_len,
+    )
 
     if text_encoder_type == 'transformer':
 
-        text_encoder = TextTransformerPooledEncoder(embeddings, d_model=text_d_model, d_ff=text_d_ff,
-                                                    dropout=text_dropout, num_heads=text_num_heads, num_layers=text_num_layers,
-                                                    reduction_d_k=text_d_k, rpr_k=text_rpr_k, rpr_value_on=False, reduction_type=text_reduction_type)
+        text_encoder = TextTransformerPooledEncoder(
+            embeddings,
+            d_model=text_d_model,
+            d_ff=text_d_ff,
+            dropout=text_dropout,
+            num_heads=text_num_heads,
+            num_layers=text_num_layers,
+            reduction_d_k=text_d_k,
+            rpr_k=text_rpr_k,
+            rpr_value_on=False,
+            reduction_type=text_reduction_type,
+        )
 
         if warmstart_text:
             # Assume for now that its going to be an NPZ file
@@ -300,20 +388,12 @@ def create_loss(n_vars, n_negatives):
 
 class ConvFeatureExtractionModel(nn.Module):
     def __init__(
-            self,
-            conv_layers: List[Tuple[int, int, int]],
-            dropout: float = 0.0,
-            conv_bias: bool = False,
+        self, conv_layers: List[Tuple[int, int, int]], dropout: float = 0.0, conv_bias: bool = False,
     ):
         super().__init__()
 
         def block(
-                n_in,
-                n_out,
-                k,
-                stride,
-                is_group_norm=False,
-                conv_bias=False,
+            n_in, n_out, k, stride, is_group_norm=False, conv_bias=False,
         ):
 
             if is_group_norm:
@@ -327,23 +407,15 @@ class ConvFeatureExtractionModel(nn.Module):
                 return nn.Sequential(
                     pytorch_conv1d(n_in, n_out, k, initializer="kaiming", stride=stride, bias=conv_bias),
                     nn.Dropout(p=dropout),
-                    nn.GELU())
+                    nn.GELU(),
+                )
 
         in_d = 1
         self.conv_layers = nn.ModuleList()
         for i, cl in enumerate(conv_layers):
             (dim, k, stride) = cl
 
-            self.conv_layers.append(
-                block(
-                    in_d,
-                    dim,
-                    k,
-                    stride,
-                    is_group_norm=i == 0,
-                    conv_bias=conv_bias,
-                )
-            )
+            self.conv_layers.append(block(in_d, dim, k, stride, is_group_norm=i == 0, conv_bias=conv_bias,))
             in_d = dim
 
     def forward(self, x):
@@ -358,16 +430,7 @@ class ConvFeatureExtractionModel(nn.Module):
 
 
 class GumbelVectorQuantizer(nn.Module):
-    def __init__(
-            self,
-            dim,
-            num_vars,
-            min_temperature,
-            max_temperature,
-            temperature_decay,
-            num_groups,
-            vq_dim
-    ):
+    def __init__(self, dim, num_vars, min_temperature, max_temperature, temperature_decay, num_groups, vq_dim):
         """Vector quantization using gumbel softmax
 
         Args:
@@ -383,9 +446,7 @@ class GumbelVectorQuantizer(nn.Module):
         self.input_dim = dim
         self.num_vars = num_vars
 
-        assert (
-                vq_dim % num_groups == 0
-        ), f"dim {vq_dim} must be divisible by groups {num_groups} for concatenation"
+        assert vq_dim % num_groups == 0, f"dim {vq_dim} must be divisible by groups {num_groups} for concatenation"
 
         # per var
         var_dim = vq_dim // num_groups
@@ -405,9 +466,7 @@ class GumbelVectorQuantizer(nn.Module):
         self.codebook_indices = None
 
     def set_num_updates(self, num_updates):
-        self.curr_temperature = max(
-            self.max_temperature * self.temperature_decay ** num_updates, self.min_temperature
-        )
+        self.curr_temperature = max(self.max_temperature * self.temperature_decay ** num_updates, self.min_temperature)
 
     # Create codebook on the fly
     def get_codebook_indices(self):
@@ -416,13 +475,9 @@ class GumbelVectorQuantizer(nn.Module):
 
             p = [range(self.num_vars)] * self.num_groups
             inds = list(product(*p))
-            self.codebook_indices = torch.tensor(
-                inds, dtype=torch.long, device=self.vars.device
-            ).flatten()
+            self.codebook_indices = torch.tensor(inds, dtype=torch.long, device=self.vars.device).flatten()
 
-            self.codebook_indices = self.codebook_indices.view(
-                self.num_vars ** self.num_groups, -1
-            )
+            self.codebook_indices = self.codebook_indices.view(self.num_vars ** self.num_groups, -1)
             for b in range(1, self.num_groups):
                 self.codebook_indices[:, b] += self.num_vars * b
             self.codebook_indices = self.codebook_indices.flatten()
@@ -430,19 +485,13 @@ class GumbelVectorQuantizer(nn.Module):
 
     def codebook(self):
         indices = self.get_codebook_indices()
-        return (
-            self.vars.squeeze(0)
-                .index_select(0, indices)
-                .view(self.num_vars ** self.num_groups, -1)
-        )
+        return self.vars.squeeze(0).index_select(0, indices).view(self.num_vars ** self.num_groups, -1)
 
     def sample_from_codebook(self, b, n):
         indices = self.get_codebook_indices()
         indices = indices.view(-1, self.num_groups)
         cb_size = indices.size(0)
-        assert (
-                n < cb_size
-        ), f"sample size {n} is greater than size of codebook {cb_size}"
+        assert n < cb_size, f"sample size {n} is greater than size of codebook {cb_size}"
         sample_idx = torch.randint(low=0, high=cb_size, size=(b * n,))
         indices = indices[sample_idx]
 
@@ -475,24 +524,18 @@ class GumbelVectorQuantizer(nn.Module):
         x = self.weight_proj(x)
         # The output back out is BxTx(GxV)
         x = x.view(bsz * tsz * self.num_groups, -1)
-        avg_probs = torch.softmax(
-            x.float(), dim=-1
-        ).mean(dim=0)
+        avg_probs = torch.softmax(x.float(), dim=-1).mean(dim=0)
 
         if self.training:
             x = F.gumbel_softmax(x.float(), tau=self.curr_temperature, hard=True).type_as(x)
         else:
             # Max over vars
             _, k = x.max(-1)
-            hard_x = (
-                x.new_zeros(*x.shape).scatter_(-1, k.view(-1, 1), 1.0).view(bsz * tsz, self.num_groups, -1)
-            )
+            hard_x = x.new_zeros(*x.shape).scatter_(-1, k.view(-1, 1), 1.0).view(bsz * tsz, self.num_groups, -1)
             x = hard_x
 
         x = x.view(bsz * tsz, self.num_groups, -1)
-        prob_ppl = torch.sum(torch.exp(
-            -torch.sum(avg_probs * torch.log(avg_probs + 1e-7), -1)
-        ))
+        prob_ppl = torch.sum(torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-7), -1)))
 
         # broadcast the quantization table
         # [B, T, (GxV), 1] *. [1, (GxV), qsz] = [B, T, (GxV), qsz]
@@ -508,16 +551,17 @@ class GumbelVectorQuantizer(nn.Module):
 
 class AudioTransformerEncoder(nn.Module):
     def __init__(
-            self,
-            num_heads: int,
-            d_model: int,
-            pdrop: float,
-            layers: int = 1,
-            activation: str = "gelu",
-            d_ff: Optional[int] = None,
-            conv_pos_kernel: int = 128,
-            conv_groups: int = 16,
-            **kwargs):
+        self,
+        num_heads: int,
+        d_model: int,
+        pdrop: float,
+        layers: int = 1,
+        activation: str = "gelu",
+        d_ff: Optional[int] = None,
+        conv_pos_kernel: int = 128,
+        conv_groups: int = 16,
+        **kwargs,
+    ):
         super().__init__()
         self.d_model = d_model
         self.conv_pos_kernel = conv_pos_kernel
@@ -525,19 +569,28 @@ class AudioTransformerEncoder(nn.Module):
         self.dropout = nn.Dropout(pdrop)
 
         std = math.sqrt((4 * (1.0 - pdrop)) / (self.conv_pos_kernel * self.d_model))
-        self.pos_conv = Conv1DSame(d_model, d_model, self.conv_pos_kernel, activation="gelu",
-                                   groups=self.conv_groups, unif=std, initializer="normal")
+        self.pos_conv = Conv1DSame(
+            d_model,
+            d_model,
+            self.conv_pos_kernel,
+            activation="gelu",
+            groups=self.conv_groups,
+            unif=std,
+            initializer="normal",
+        )
         self.pos_conv.conv[1] = nn.utils.weight_norm(self.pos_conv.conv[1], name="weight", dim=2)
         if not d_ff:
             d_ff = 4 * d_model
 
-        self.transformer = TransformerEncoderStack(num_heads=num_heads,
-                                                   d_model=d_model,
-                                                   pdrop=pdrop,
-                                                   layers=layers,
-                                                   activation=activation,
-                                                   layer_norms_after=True,
-                                                   d_ff=d_ff)
+        self.transformer = TransformerEncoderStack(
+            num_heads=num_heads,
+            d_model=d_model,
+            pdrop=pdrop,
+            layers=layers,
+            activation=activation,
+            layer_norms_after=True,
+            d_ff=d_ff,
+        )
         self.ln = nn.LayerNorm(self.d_model)
 
     def forward(self, x, pad_mask=None):
@@ -574,9 +627,22 @@ class Wav2Vec2Encoder(nn.Module):
 
 
     """
-    def __init__(self, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1,
-                 d_ff=None, dropout_input=0.1, dropout_features=0.0,
-                 timestep_masking=0.5, channel_masking=0.1, timestep_mask_len=10, channel_mask_len=64):
+
+    def __init__(
+        self,
+        conv_features=CONV_FEATURES[16],
+        d_model=768,
+        num_heads=12,
+        num_layers=12,
+        dropout=0.1,
+        d_ff=None,
+        dropout_input=0.1,
+        dropout_features=0.0,
+        timestep_masking=0.5,
+        channel_masking=0.1,
+        timestep_mask_len=10,
+        channel_mask_len=64,
+    ):
         super().__init__()
         fx_dsz = conv_features[-1][0]
         self.layer_norm = torch.nn.LayerNorm(fx_dsz)
@@ -586,9 +652,7 @@ class Wav2Vec2Encoder(nn.Module):
         self.feature_extractor = ConvFeatureExtractionModel(conv_features)
         self.proj_to_input = Dense(fx_dsz, d_model)
         self.encoder = AudioTransformerEncoder(num_heads, d_model, dropout, num_layers, d_ff=d_ff)
-        self.mask_emb = nn.Parameter(
-            torch.FloatTensor(d_model).uniform_()
-        )
+        self.mask_emb = nn.Parameter(torch.FloatTensor(d_model).uniform_())
         self.timestep_masking = timestep_masking
         self.channel_masking = channel_masking
         self.timestep_mask_len = timestep_mask_len
@@ -625,12 +689,37 @@ class Wav2Vec2Encoder(nn.Module):
 
 
 class Wav2Vec2AcousticModel(nn.Module):
-    def __init__(self, num_labels, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.0,
-                 dropout_features=0.0, timestep_masking=0.5, channel_masking=0.1, timestep_mask_len=10, channel_mask_len=64):
+    def __init__(
+        self,
+        num_labels,
+        conv_features=CONV_FEATURES[16],
+        d_model=768,
+        num_heads=12,
+        num_layers=12,
+        dropout=0.1,
+        d_ff=None,
+        dropout_input=0.0,
+        dropout_features=0.0,
+        timestep_masking=0.5,
+        channel_masking=0.1,
+        timestep_mask_len=10,
+        channel_mask_len=64,
+    ):
         super().__init__()
-        self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff,
-                                       dropout_input, dropout_features, timestep_masking, channel_masking,
-                                       timestep_mask_len, channel_mask_len)
+        self.encoder = Wav2Vec2Encoder(
+            conv_features,
+            d_model,
+            num_heads,
+            num_layers,
+            dropout,
+            d_ff,
+            dropout_input,
+            dropout_features,
+            timestep_masking,
+            channel_masking,
+            timestep_mask_len,
+            channel_mask_len,
+        )
         self.proj = pytorch_linear(d_model, num_labels)
         self.freeze = True
 
@@ -643,21 +732,54 @@ class Wav2Vec2AcousticModel(nn.Module):
 
 
 class Wav2Vec2PooledEncoder(nn.Module):
-    def __init__(self, conv_features=CONV_FEATURES[16], d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, dropout_input=0.0,
-                 dropout_features=0.0, timestep_masking=0.5, channel_masking=0.1, timestep_mask_len=10, channel_mask_len=64,
-                 reduction_type='SHA', reduction_d_k=64):
+    def __init__(
+        self,
+        conv_features=CONV_FEATURES[16],
+        d_model=768,
+        num_heads=12,
+        num_layers=12,
+        dropout=0.1,
+        d_ff=None,
+        dropout_input=0.0,
+        dropout_features=0.0,
+        timestep_masking=0.5,
+        channel_masking=0.1,
+        timestep_mask_len=10,
+        channel_mask_len=64,
+        reduction_type='SHA',
+        reduction_d_k=64,
+    ):
         super().__init__()
-        self.encoder = Wav2Vec2Encoder(conv_features, d_model, num_heads, num_layers, dropout, d_ff,
-                                       dropout_input, dropout_features, timestep_masking, channel_masking,
-                                       timestep_mask_len, channel_mask_len)
+        self.encoder = Wav2Vec2Encoder(
+            conv_features,
+            d_model,
+            num_heads,
+            num_layers,
+            dropout,
+            d_ff,
+            dropout_input,
+            dropout_features,
+            timestep_masking,
+            channel_masking,
+            timestep_mask_len,
+            channel_mask_len,
+        )
         self.output_dim = self.encoder.output_dim
         reduction_type = reduction_type.lower()
         if reduction_type == "2ha":
-            self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k), nn.Linear(2*d_model, d_model))
+            self.reduction_layer = nn.Sequential(
+                TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k), nn.Linear(2 * d_model, d_model)
+            )
         elif reduction_type == "2ha_max":
-            self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='max'), nn.Linear(2*d_model, d_model))
+            self.reduction_layer = nn.Sequential(
+                TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='max'),
+                nn.Linear(2 * d_model, d_model),
+            )
         elif reduction_type == "2ha_mean":
-            self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='mean'), nn.Linear(2*d_model, d_model))
+            self.reduction_layer = nn.Sequential(
+                TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='mean'),
+                nn.Linear(2 * d_model, d_model),
+            )
         elif reduction_type == "sha":
             self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k)
         elif reduction_type == "sha_max":
@@ -692,9 +814,28 @@ class Wav2Vec2Model(nn.Module):
     is not required, keeping both models simple and focused on a single task
 
     """
-    def __init__(self, conv_features=CONV_FEATURES[16], num_vq_vars=320, start_temp=START_TEMP, end_temp=END_TEMP, temp_decay_factor=TEMP_DECAY_FACTOR,
-                 num_vq_groups=2, d_model=768, num_heads=12, num_layers=12, dropout=0.1, d_ff=None, final_dim=256,
-                 dropout_input=0.1, dropout_features=0.1, timestep_masking=0.65, channel_masking=0.0, timestep_mask_len=10, channel_mask_len=64):
+
+    def __init__(
+        self,
+        conv_features=CONV_FEATURES[16],
+        num_vq_vars=320,
+        start_temp=START_TEMP,
+        end_temp=END_TEMP,
+        temp_decay_factor=TEMP_DECAY_FACTOR,
+        num_vq_groups=2,
+        d_model=768,
+        num_heads=12,
+        num_layers=12,
+        dropout=0.1,
+        d_ff=None,
+        final_dim=256,
+        dropout_input=0.1,
+        dropout_features=0.1,
+        timestep_masking=0.65,
+        channel_masking=0.0,
+        timestep_mask_len=10,
+        channel_mask_len=64,
+    ):
         super().__init__()
         fx_dsz = conv_features[-1][0]
         self.layer_norm = torch.nn.LayerNorm(fx_dsz)
@@ -703,8 +844,9 @@ class Wav2Vec2Model(nn.Module):
 
         self.feature_extractor = ConvFeatureExtractionModel(conv_features)
         self.proj_to_input = Dense(fx_dsz, d_model)
-        self.quantizer = GumbelVectorQuantizer(fx_dsz, num_vq_vars, start_temp, end_temp, temp_decay_factor,
-                                               num_vq_groups, final_dim)
+        self.quantizer = GumbelVectorQuantizer(
+            fx_dsz, num_vq_vars, start_temp, end_temp, temp_decay_factor, num_vq_groups, final_dim
+        )
         self.encoder = AudioTransformerEncoder(num_heads, d_model, dropout, num_layers, d_ff=d_ff)
         self.project_q = Dense(final_dim, final_dim)
         self.final_proj = Dense(d_model, final_dim)
@@ -712,9 +854,7 @@ class Wav2Vec2Model(nn.Module):
         self.channel_masking = channel_masking
         self.timestep_mask_len = timestep_mask_len
         self.channel_mask_len = channel_mask_len
-        self.mask_emb = nn.Parameter(
-            torch.FloatTensor(d_model).uniform_()
-        )
+        self.mask_emb = nn.Parameter(torch.FloatTensor(d_model).uniform_())
 
     def set_num_updates(self, s):
         self.quantizer.set_num_updates(s)
@@ -738,9 +878,7 @@ class Wav2Vec2Model(nn.Module):
             channel_mask = torch.from_numpy(channel_mask).to(x.device).unsqueeze(1).view(-1, T, -1)
             features[channel_mask] = 0
 
-        y = unmasked_features[time_mask].view(
-            unmasked_features.size(0), -1, unmasked_features.size(-1)
-        )
+        y = unmasked_features[time_mask].view(unmasked_features.size(0), -1, unmasked_features.size(-1))
         x = self.encoder(features)
         y, vq_probs = self.quantizer(y)
 
@@ -750,7 +888,6 @@ class Wav2Vec2Model(nn.Module):
 
 
 class Sampler:
-
     def __init__(self, n_negatives=100):
         self.n_negatives = n_negatives
 
@@ -770,9 +907,5 @@ class Sampler:
 
         neg_idxs = neg_idxs + stride
         negs = y[neg_idxs.view(-1)]
-        negs = negs.view(
-            B, T, self.n_negatives, C
-        ).permute(
-            2, 0, 1, 3
-        )  # to NxBxTxC
+        negs = negs.view(B, T, self.n_negatives, C).permute(2, 0, 1, 3)  # to NxBxTxC
         return negs, neg_idxs

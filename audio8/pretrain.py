@@ -19,6 +19,7 @@ from eight_mile.pytorch.layers import save_checkpoint, init_distributed
 from eight_mile.pytorch.optz import *
 from eight_mile.pytorch.serialize import convert_transformers_keys
 import torch.nn.functional as F
+
 logger = logging.getLogger(__file__)
 
 
@@ -28,8 +29,7 @@ def train():
     parser.add_argument("--manifest_dir", required=True)
     parser.add_argument("--train_manifest_file", type=str, default="train.tsv", help='File path to use for train file')
     parser.add_argument("--valid_manifest_file", type=str, default="valid.tsv", help='File path to use for valid file')
-    parser.add_argument("--dataset_key", default="ls",
-                        help="dataset key for basedir")
+    parser.add_argument("--dataset_key", default="ls", help="dataset key for basedir")
     parser.add_argument("--num_vq_vars", type=int, default=320)
     parser.add_argument("--num_vq_groups", type=int, default=2)
     parser.add_argument("--input_sample_rate", type=int, default=16_000)
@@ -45,15 +45,19 @@ def train():
     parser.add_argument("--lr_scheduler", type=str, default='cosine', help="The type of learning rate decay scheduler")
     parser.add_argument("--lr_decay_steps", type=int, help="decay steps of lr scheduler")
     parser.add_argument("--lr_decay_rate", type=float, help="decay rate of lr scheduler")
-    parser.add_argument("--lr_alpha", type=float, default=0., help="parameter alpha for cosine decay scheduler")
+    parser.add_argument("--lr_alpha", type=float, default=0.0, help="parameter alpha for cosine decay scheduler")
     parser.add_argument("--optim", default="adamw", type=str, help="Optimizer to use (defaults to adamw)")
     parser.add_argument("--lr", type=float, default=2.0e-4, help="Learning rate")
     parser.add_argument("--clip", type=float, default=1.0, help="Clipping gradient norm")
     parser.add_argument("--weight_decay", type=float, default=1.0e-2, help="Weight decay")
     parser.add_argument("--bucketing", type=str2bool, default=False, help="Bucket the inputs to fixed batch sizes?")
-    parser.add_argument("--buckets", type=int, nargs="+",
-                        help="Bucket sizes if bucketing",
-                        default=[11111, 35714, 38461, 41666, 45454, 50000, 55555, 62500, 71428, 83333, 100000, 125000, 166666, 250000])
+    parser.add_argument(
+        "--buckets",
+        type=int,
+        nargs="+",
+        help="Bucket sizes if bucketing",
+        default=[11111, 35714, 38461, 41666, 45454, 50000, 55555, 62500, 71428, 83333, 100000, 125000, 166666, 250000],
+    )
 
     parser.add_argument("--train_steps", type=int, default=400_000, help="Num training steps")
     parser.add_argument("--valid_steps", type=int, default=10_000, help="Num valid steps to evaluate each time")
@@ -63,17 +67,16 @@ def train():
     parser.add_argument("--steps_per_checkpoint", type=int, default=1000, help="The number of steps per checkpoint")
     parser.add_argument("--preprocessed", type=str2bool, default=True, help="Has the data already been preprocessed?")
     parser.add_argument("--model_type", default="wav2vec2")
-    parser.add_argument("--device", type=str,
-                        default="cuda" if torch.cuda.is_available() else "cpu",
-                        help="Device (cuda or cpu)")
-    parser.add_argument("--distributed",
-                        type=str2bool,
-                        default=False,
-                        help="Are we doing distributed training?")
-    parser.add_argument("--local_rank",
-                        type=int,
-                        default=-1,
-                        help="Local rank for distributed training (-1 means use the environment variables to find)")
+    parser.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)"
+    )
+    parser.add_argument("--distributed", type=str2bool, default=False, help="Are we doing distributed training?")
+    parser.add_argument(
+        "--local_rank",
+        type=int,
+        default=-1,
+        help="Local rank for distributed training (-1 means use the environment variables to find)",
+    )
 
     args = parser.parse_args()
 
@@ -101,7 +104,7 @@ def train():
     valid_loader = DataLoader(valid_set, batch_size=None)
     logger.info("Loaded datasets")
 
-    model = create_model(args.target_sample_rate//1000, **vars(args)).to(args.device)
+    model = create_model(args.target_sample_rate // 1000, **vars(args)).to(args.device)
     loss_function = create_loss(args.num_vq_vars * args.num_vq_groups, 100).to(args.device)
     logger.info("Loaded model and loss")
 
@@ -125,12 +128,17 @@ def train():
             vec = args.restart_from.split("-")
             try:
                 global_step = int(vec[-1].split(".")[0])
-                logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
-                        args.restart_from, global_step)
+                logger.info(
+                    "Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
+                    args.restart_from,
+                    global_step,
+                )
             except:
                 logger.warning("No checkpoint step number found.  Starting at global_step=0")
 
-    optimizer = OptimizerManager(model, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay)
+    optimizer = OptimizerManager(
+        model, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay
+    )
     logger.info("Model has {:,} parameters".format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
 
     # Prepare model for distributed training if needed
@@ -172,7 +180,7 @@ def train():
 
         if (steps + 1) % report_on == 0:
             steps_per_sec = 1.0 / step_time.avg
-            logging.info('%s, steps/min %f, LR %.6f', avg_loss, steps_per_sec*60, optimizer.current_lr)
+            logging.info('%s, steps/min %f, LR %.6f', avg_loss, steps_per_sec * 60, optimizer.current_lr)
 
         if (steps + 1) % update_on == 0 and args.local_rank < 1:
             save_checkpoint(model, model_base, steps, tick_type='step')

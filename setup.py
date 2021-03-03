@@ -26,9 +26,11 @@ class About(object):
     DOC_URL = "{}/tree/master/".format(URL)
     DOC_NAME = 'docs/{}.md'.format(NAME)
 
+
 def write_manifest(lines):
     with open("MANIFEST.in", "w") as f:
         f.write("\n".join(map(lambda x: 'include {}'.format(x), lines)))
+
 
 def fix_links(text):
     """Pypi doesn't seem to host multiple docs so replace local links with ones to github."""
@@ -66,24 +68,11 @@ def main():
         url=About.URL,
         download_url=About.DOWNLOAD_URL,
         packages=find_packages(exclude=['tests', 'api-examples']),
-        package_data={
-        },
+        package_data={},
         include_package_data=False,
-        install_requires=[
-            'numpy',
-            'six',
-            'soundfile',
-            'editdistance',
-            'mead-baseline',
-        ],
-        extras_require={
-            'test': ['pytest', 'mock', 'contextdecorator', 'pytest-forked'],
-            'scipy': ['scipy']
-        },
-        entry_points={
-            'console_scripts': [
-            ]
-        },
+        install_requires=['numpy', 'six', 'soundfile', 'editdistance', 'mead-baseline',],
+        extras_require={'test': ['pytest', 'mock', 'contextdecorator', 'pytest-forked'], 'scipy': ['scipy']},
+        entry_points={'console_scripts': []},
         classifiers={
             'Development Status :: 3 - Alpha',
             'Environment :: Console',
