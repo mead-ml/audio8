@@ -11,6 +11,7 @@ import soundfile as sf
 from torch.utils.data import DataLoader, IterableDataset
 from eight_mile.utils import Offsets
 from eight_mile.pytorch.optz import *
+
 try:
     import scipy.signal
 except:
@@ -19,7 +20,6 @@ logger = logging.getLogger(__file__)
 
 
 class SoundfileAudioReader:
-
     def transform(self, audio):
         return audio.astype(np.float32)
 
@@ -34,7 +34,6 @@ class SoundfileAudioReader:
 
 
 class AudioResampleReader(SoundfileAudioReader):
-
     def __init__(self, sample_factor: float):
         """
         Resampl
@@ -91,10 +90,9 @@ def batch_by_size(
         sample_lens.append(num_tokens)
         sample_len = max(sample_len, num_tokens)
 
-        assert max_tokens <= 0 or sample_len <= max_tokens, (
-            "sentence at index {} of size {} exceeds max_tokens "
-            "limit of {}!".format(idx, sample_len, max_tokens)
-        )
+        assert (
+            max_tokens <= 0 or sample_len <= max_tokens
+        ), "sentence at index {} of size {} exceeds max_tokens " "limit of {}!".format(idx, sample_len, max_tokens)
         num_tokens = (len(batch) + 1) * sample_len
 
         if _is_batch_full(len(batch), num_tokens, max_tokens, max_sentences):
@@ -115,11 +113,26 @@ class AudioTextLetterDataset(IterableDataset):
     TGT_BPE = 'bpe'
     TGT_WRD = 'wrd'
 
-    def __init__(self, tsv_file, vec, target_tokens_per_batch, max_src_length, distribute=True, shuffle=True,
-                 max_dst_length=1200, tgt_type=TGT_LETTER, input_sample_rate=16_000, target_sample_rate=16_000):
+    def __init__(
+        self,
+        tsv_file,
+        vec,
+        target_tokens_per_batch,
+        max_src_length,
+        distribute=True,
+        shuffle=True,
+        max_dst_length=1200,
+        tgt_type=TGT_LETTER,
+        input_sample_rate=16_000,
+        target_sample_rate=16_000,
+    ):
         super().__init__()
-        self.sample_factor = target_sample_rate/input_sample_rate
-        self.reader = AudioResampleReader(target_sample_rate/input_sample_rate) if input_sample_rate != target_sample_rate else SoundfileAudioReader()
+        self.sample_factor = target_sample_rate / input_sample_rate
+        self.reader = (
+            AudioResampleReader(target_sample_rate / input_sample_rate)
+            if input_sample_rate != target_sample_rate
+            else SoundfileAudioReader()
+        )
         self.min_src_length = 0  # TODO: remove?
         self.max_src_length = max_src_length
         self.max_dst_length = max_dst_length
@@ -169,9 +182,11 @@ class AudioTextLetterDataset(IterableDataset):
                     # If the data is already BPE, we dont want to re-tokenize it, we just have to convert it to ints
                     # the assumption here is that if its BPE, the start and token are not part of the chunks
                     else:
-                        tokens = [self.vec.vocab[t] for t in self.vec.internal.emit_begin_tok] + \
-                                 [self.get_or_unk_warn(t) for t in text] + \
-                                 [self.vec.vocab[t] for t in self.vec.internal.emit_end_tok]
+                        tokens = (
+                            [self.vec.vocab[t] for t in self.vec.internal.emit_begin_tok]
+                            + [self.get_or_unk_warn(t) for t in text]
+                            + [self.vec.vocab[t] for t in self.vec.internal.emit_end_tok]
+                        )
                         tokens = np.array(tokens, dtype=np.int)
                     self.files.append(path)
                     self.sizes.append(x_length)
@@ -181,9 +196,7 @@ class AudioTextLetterDataset(IterableDataset):
         keys = np.arange(len(self.files)) if not self.shuffle else np.random.permutation(len(self.files))
         indices = np.lexsort((keys, self.sizes))[::-1]
 
-        self.batches = batch_by_size(
-            indices, self.sizes, self.max_elems_per_batch, max_sentences=128,
-        )
+        self.batches = batch_by_size(indices, self.sizes, self.max_elems_per_batch, max_sentences=128,)
 
     def _get_worker_info(self):
         return torch.utils.data.get_worker_info() if self.distribute else None
@@ -200,14 +213,16 @@ class AudioTextLetterDataset(IterableDataset):
         else:
             num_workers_per_node = worker_info.num_workers
             node_worker_id = worker_info.id
-        all_workers = (self.world_size * num_workers_per_node)
+        all_workers = self.world_size * num_workers_per_node
         offset = self.rank * num_workers_per_node + node_worker_id
         read_file_order = list(range(offset, len(self.batches), all_workers))
         if not read_file_order:
             if offset > 0:
                 # This is probably wrong
-                logger.warning(f"There are no files to read for worker {node_worker_id}, offset {offset}!" +
-                               " This might mean that you are passing an incorrect training or validation directory")
+                logger.warning(
+                    f"There are no files to read for worker {node_worker_id}, offset {offset}!"
+                    + " This might mean that you are passing an incorrect training or validation directory"
+                )
             else:
                 # This is definitely wrong
                 raise Exception(f"No files of pattern {self.pattern} were found in {self.directory}!")
@@ -222,7 +237,9 @@ class AudioTextLetterDataset(IterableDataset):
             for rd in read_order:
                 batch = self.batches[rd]
                 batch = self.read_batch(batch)
-                yield batch['signal'], batch['signal_lengths'], batch['token_ids'], batch['token_lengths'], batch['files']
+                yield batch['signal'], batch['signal_lengths'], batch['token_ids'], batch['token_lengths'], batch[
+                    'files'
+                ]
 
     def read_batch(self, batch):
         zp_text = np.ones((len(batch), self.max_dst_length), dtype=np.long)
@@ -241,13 +258,19 @@ class AudioTextLetterDataset(IterableDataset):
             audio = self.process_sample(pth)
             if len(audio) > self.max_src_length:
                 raise Exception(f'Unexpected audio length {len(audio)}.  Max should be {self.max_src_length}')
-            zp_audio[i, :len(audio)] = audio
+            zp_audio[i, : len(audio)] = audio
             audio_lengths[i] = len(audio)
             text_lengths[i] = len_text
         mx_src_seen = audio_lengths.max()
 
         mx_dst_seen = min(text_lengths.max(), self.max_dst_length)
-        return {'signal': zp_audio[:, :mx_src_seen], 'signal_lengths': audio_lengths, 'token_ids': zp_text[:, :mx_dst_seen], 'token_lengths': text_lengths, 'files': files}
+        return {
+            'signal': zp_audio[:, :mx_src_seen],
+            'signal_lengths': audio_lengths,
+            'token_ids': zp_text[:, :mx_dst_seen],
+            'token_lengths': text_lengths,
+            'files': files,
+        }
 
     def process_sample(self, file):
         """Read in a line and turn it into an entry.  FIXME, get from anywhere
@@ -261,11 +284,23 @@ class AudioTextLetterDataset(IterableDataset):
 
 
 class AudioFileDataset(IterableDataset):
-
-    def __init__(self, manifest, max_length, target_tokens_per_batch, distribute=True,
-                 shuffle=True,  min_length=0, input_sample_rate=16_000, target_sample_rate=16_000):
+    def __init__(
+        self,
+        manifest,
+        max_length,
+        target_tokens_per_batch,
+        distribute=True,
+        shuffle=True,
+        min_length=0,
+        input_sample_rate=16_000,
+        target_sample_rate=16_000,
+    ):
         super().__init__()
-        self.reader = AudioResampleReader(target_sample_rate/input_sample_rate) if input_sample_rate != target_sample_rate else SoundfileAudioReader()
+        self.reader = (
+            AudioResampleReader(target_sample_rate / input_sample_rate)
+            if input_sample_rate != target_sample_rate
+            else SoundfileAudioReader()
+        )
         self.max_length = max_length
         self.manifest = manifest
         self.rank = 0
@@ -310,14 +345,16 @@ class AudioFileDataset(IterableDataset):
         else:
             num_workers_per_node = worker_info.num_workers
             node_worker_id = worker_info.id
-        all_workers = (self.world_size * num_workers_per_node)
+        all_workers = self.world_size * num_workers_per_node
         offset = self.rank * num_workers_per_node + node_worker_id
         read_file_order = list(range(offset, len(self.files), all_workers))
         if not read_file_order:
             if offset > 0:
                 # This is probably wrong
-                logger.warning(f"There are no files to read for worker {node_worker_id}, offset {offset}!" +
-                               " This might mean that you are passing an incorrect training or validation directory")
+                logger.warning(
+                    f"There are no files to read for worker {node_worker_id}, offset {offset}!"
+                    + " This might mean that you are passing an incorrect training or validation directory"
+                )
             else:
                 # This is definitely wrong
                 raise Exception(f"No files of pattern {self.pattern} were found in {self.directory}!")
@@ -332,7 +369,6 @@ class AudioFileDataset(IterableDataset):
             for file_idx in read_file_order:
                 file, _ = self.files[file_idx]
                 yield self.process_sample(file, self.max_length)
-
 
     def process_sample(self, file, len):
         """Read in a line and turn it into an entry.  FIXME, get from anywhere
@@ -360,14 +396,14 @@ class AudioFileDataset(IterableDataset):
                 batch = np.stack([s[:min_length] for s in samples])
                 samples = []
                 num_tokens_predicted = 0
-                #logger.debug("(%d, %d) %d", batch.shape[0], batch.shape[1], np.product(batch.shape))
+                # logger.debug("(%d, %d) %d", batch.shape[0], batch.shape[1], np.product(batch.shape))
                 yield batch
 
 
 def find_fit(v, fits):
     truncate_to = 0
     for fit in fits:
-        if v//fit:
+        if v // fit:
             truncate_to = fit
         else:
             break
@@ -375,8 +411,9 @@ def find_fit(v, fits):
 
 
 class BucketingAudioDataset(AudioFileDataset):
-
-    def __init__(self, buckets, manifest, max_length, target_tokens_per_batch, distribute=True, shuffle=True,  min_length=0):
+    def __init__(
+        self, buckets, manifest, max_length, target_tokens_per_batch, distribute=True, shuffle=True, min_length=0
+    ):
         self.bucket_lengths = buckets
         super().__init__(manifest, max_length, target_tokens_per_batch, distribute, shuffle, min_length)
 
@@ -415,5 +452,3 @@ class BucketingAudioDataset(AudioFileDataset):
                 bucket = keys[bucket_idx]
                 for (file, _) in self.files[bucket]:
                     yield self.process_sample(file, bucket)
-
-

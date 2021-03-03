@@ -63,8 +63,7 @@ def train():
     parser.add_argument("--input_sample_rate", type=int, default=16_000)
     parser.add_argument("--target_sample_rate", type=int, default=16_000)
     parser.add_argument("--dict_file", type=str, help="Dictionary file", default='dict.ltr.txt')
-    parser.add_argument("--dataset_key", default="LibriSpeech",
-                        help="dataset key for basedir")
+    parser.add_argument("--dataset_key", default="LibriSpeech", help="dataset key for basedir")
     parser.add_argument("--grad_accum", type=int, default=1)
     parser.add_argument("--d_model", type=int, default=768, help="Model dimension (and embedding dsz)")
     parser.add_argument("--d_ff", type=int, default=3072, help="FFN dimension")
@@ -77,39 +76,49 @@ def train():
     parser.add_argument("--lr_scheduler", type=str, default='cosine', help="The type of learning rate decay scheduler")
     parser.add_argument("--lr_decay_steps", type=int, help="decay steps of lr scheduler")
     parser.add_argument("--lr_decay_rate", type=float, help="decay rate of lr scheduler")
-    parser.add_argument("--lr_alpha", type=float, default=0., help="parameter alpha for cosine decay scheduler")
+    parser.add_argument("--lr_alpha", type=float, default=0.0, help="parameter alpha for cosine decay scheduler")
     parser.add_argument("--optim", default="adamw", type=str, help="Optimizer to use (defaults to adamw)")
     parser.add_argument("--lr", type=float, default=2.0e-5, help="Learning rate")
     parser.add_argument("--clip", type=float, default=25.0, help="Clipping gradient norm")
     parser.add_argument("--weight_decay", type=float, default=1.0e-2, help="Weight decay")
-    parser.add_argument("--restart_tt", type=str, help="Optional param for legacy checkpoints", choices=['step', 'ignore'])
+    parser.add_argument(
+        "--restart_tt", type=str, help="Optional param for legacy checkpoints", choices=['step', 'ignore']
+    )
     parser.add_argument("--restart_from", type=str, help="Option allows you to restart from a previous checkpoint")
     parser.add_argument("--warmup_steps", type=int, default=10000, help="Num warmup steps")
     parser.add_argument("--model_type", default="wav2vec2")
     parser.add_argument("--unfreeze_enc_after_step", default=10_000)
-    parser.add_argument("--timestep_masking", type=float, default=0.5, help="Timestep masking prob, gets divided by timestep_mask_len")
+    parser.add_argument(
+        "--timestep_masking", type=float, default=0.5, help="Timestep masking prob, gets divided by timestep_mask_len"
+    )
     parser.add_argument("--timestep_mask_len", type=int, default=10, help="Num consecutive timesteps to mask")
-    parser.add_argument("--channel_masking", type=float, default=0.1, help="Channel masking prob, gets divided by channel_mask_len")
+    parser.add_argument(
+        "--channel_masking", type=float, default=0.1, help="Channel masking prob, gets divided by channel_mask_len"
+    )
     parser.add_argument("--channel_mask_len", type=int, default=64, help="Num consecutive channels to mask")
     parser.add_argument("--train_steps", type=int, default=400_000, help="Num training steps")
     parser.add_argument("--valid_steps", type=int, default=1000, help="Valid steps to evaluate each time")
-    parser.add_argument("--steps_per_valid_update", type=int, default=10_000, help="How many steps of validation before we report metrics")
+    parser.add_argument(
+        "--steps_per_valid_update",
+        type=int,
+        default=10_000,
+        help="How many steps of validation before we report metrics",
+    )
     parser.add_argument("--steps_per_checkpoint", type=int, default=10_000, help="The number of steps per checkpoint")
     parser.add_argument("--verbose", type=str2bool, help="Verbose", default=False)
-    parser.add_argument("--device", type=str,
-                        default="cuda" if torch.cuda.is_available() else "cpu",
-                        help="Device (cuda or cpu)")
-    parser.add_argument("--distributed",
-                        type=str2bool,
-                        default=False,
-                        help="Are we doing distributed training?")
+    parser.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)"
+    )
+    parser.add_argument("--distributed", type=str2bool, default=False, help="Are we doing distributed training?")
     parser.add_argument("--vocab_file", help="Vocab for output decoding")
     parser.add_argument("--early_stopping_metric", type=str, help="Use early stopping on the key specified")
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
-    parser.add_argument("--local_rank",
-                        type=int,
-                        default=-1,
-                        help="Local rank for distributed training (-1 means use the environment variables to find)")
+    parser.add_argument(
+        "--local_rank",
+        type=int,
+        default=-1,
+        help="Local rank for distributed training (-1 means use the environment variables to find)",
+    )
 
     args = parser.parse_args()
 
@@ -141,26 +150,38 @@ def train():
     train_dataset = os.path.join(args.root_dir, args.train_dataset)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
-    train_set = AudioTextLetterDataset(train_dataset, vec, args.target_tokens_per_batch, args.max_sample_len,
-                                       input_sample_rate=args.input_sample_rate,
-                                       target_sample_rate=args.target_sample_rate,
-                                       shuffle=True, distribute=args.distributed)
-    valid_set = AudioTextLetterDataset(valid_dataset, vec, args.target_tokens_per_batch, args.max_sample_len,
-                                       input_sample_rate=args.input_sample_rate,
-                                       target_sample_rate=args.target_sample_rate,
-                                       distribute=False, shuffle=False)
+    train_set = AudioTextLetterDataset(
+        train_dataset,
+        vec,
+        args.target_tokens_per_batch,
+        args.max_sample_len,
+        input_sample_rate=args.input_sample_rate,
+        target_sample_rate=args.target_sample_rate,
+        shuffle=True,
+        distribute=args.distributed,
+    )
+    valid_set = AudioTextLetterDataset(
+        valid_dataset,
+        vec,
+        args.target_tokens_per_batch,
+        args.max_sample_len,
+        input_sample_rate=args.input_sample_rate,
+        target_sample_rate=args.target_sample_rate,
+        distribute=False,
+        shuffle=False,
+    )
     train_loader = DataLoader(train_set, batch_size=None)  # , num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
 
     logger.info("Loaded datasets")
 
     num_labels = len(vocab)
-    model = create_acoustic_model(num_labels, args.target_sample_rate//1000, **vars(args)).to(args.device)
+    model = create_acoustic_model(num_labels, args.target_sample_rate // 1000, **vars(args)).to(args.device)
 
     loss_function = CTCLoss().to(args.device)
     logger.info("Loaded model and loss")
 
-    validate_on = min(args.train_steps//2, args.steps_per_checkpoint)
+    validate_on = min(args.train_steps // 2, args.steps_per_checkpoint)
     report_on = max(10, args.steps_per_checkpoint) // 10
     lr_decay = CosineDecaySchedulerPyTorch(decay_steps=args.train_steps, alpha=args.lr_alpha, lr=args.lr)
     linear_warmup = WarmupLinearSchedulerPyTorch(args.warmup_steps, lr=args.lr)
@@ -175,7 +196,7 @@ def train():
             try:
                 unmapped = load_fairseq_bin(model.encoder, args.restart_from)
             except:
-                unmapped = load_fairseq_bin(model, args.restart_from, ctc=True, sr=args.target_sample_rate//1000)
+                unmapped = load_fairseq_bin(model, args.restart_from, ctc=True, sr=args.target_sample_rate // 1000)
             print(unmapped)
             args.tick_type = None
         else:
@@ -200,10 +221,15 @@ def train():
             else:
                 logger.warning(f"Setting step number to 0")
 
-            logger.info("Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
-                        args.restart_from, global_step)
+            logger.info(
+                "Restarting from a previous checkpoint %s.\n\tStarting at global_step=%d",
+                args.restart_from,
+                global_step,
+            )
 
-    optimizer = OptimizerManager(model, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay)
+    optimizer = OptimizerManager(
+        model, global_step, optim=args.optim, lr=args.lr, lr_function=lr_sched, weight_decay=args.weight_decay
+    )
     logger.info("Model has {:,} parameters".format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
 
     # Prepare model for distributed training if needed
@@ -213,7 +239,9 @@ def train():
         # the selection of gpus based on rank, it would need to select multiple ids
         # based on rank, here we select only a single gpu and use it for input and
         # output.
-        model = DistributedDataParallel(model, device_ids=[args.device], output_device=args.device, find_unused_parameters=True)
+        model = DistributedDataParallel(
+            model, device_ids=[args.device], output_device=args.device, find_unused_parameters=True
+        )
         _model = model.module
         logger.info("Model located on %s", args.device)
     else:
@@ -254,7 +282,13 @@ def train():
 
             if (steps + 1) % report_on == 0:
                 steps_per_sec = 1.0 / step_time.avg
-                logging.info('%s, steps/min %f, LR %.6f, avg batch size %.2f', avg_loss, steps_per_sec*60, optimizer.current_lr, batch_sizes.avg)
+                logging.info(
+                    '%s, steps/min %f, LR %.6f, avg batch size %.2f',
+                    avg_loss,
+                    steps_per_sec * 60,
+                    optimizer.current_lr,
+                    batch_sizes.avg,
+                )
 
             if (steps + 1) % validate_on == 0 and args.local_rank < 1:
                 train_token_loss = avg_loss.avg
@@ -276,7 +310,15 @@ def train():
 
                     try:
                         with torch.no_grad():
-                            loss, valid_step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, verbose=args.verbose, training=False)
+                            loss, valid_step_metrics = run_step(
+                                index2vocab,
+                                model,
+                                batch,
+                                loss_function,
+                                args.device,
+                                verbose=args.verbose,
+                                training=False,
+                            )
                         c_errors += valid_step_metrics['c_errors']
                         w_errors += valid_step_metrics['w_errors']
                         c_total += valid_step_metrics['c_total']

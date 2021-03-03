@@ -6,7 +6,9 @@ from audio8.text import read_vocab_file
 import torch
 
 parser = argparse.ArgumentParser(description='Convert a wav2vec2 checkpoint to 8-mile')
-parser.add_argument('--model', help='A file path pointing to a wav2vec2 model checkpoint, either pretrained or fine-tuned')
+parser.add_argument(
+    '--model', help='A file path pointing to a wav2vec2 model checkpoint, either pretrained or fine-tuned'
+)
 parser.add_argument('--ctc', help="Is the checkpoint a CTC checkpoint", type=str2bool, default=False)
 parser.add_argument('--target_dir', help='This is the target directory where we will put the checkpoints')
 parser.add_argument('--vocab_file', help='If this is a CTC checkpoint, we need a vocab')
@@ -30,14 +32,28 @@ sr = args.target_sample_rate // 1000
 print(f'Sample rate {args.target_sample_rate} khz')
 if args.ctc:
     vocab = read_vocab_file(args.vocab_file)
-    model = Wav2Vec2AcousticModel(conv_features=CONV_FEATURES[sr], num_labels=len(vocab), d_model=args.d_model, num_heads=args.num_heads, num_layers=args.num_layers, d_ff=args.d_ff)
+    model = Wav2Vec2AcousticModel(
+        conv_features=CONV_FEATURES[sr],
+        num_labels=len(vocab),
+        d_model=args.d_model,
+        num_heads=args.num_heads,
+        num_layers=args.num_layers,
+        d_ff=args.d_ff,
+    )
     unmapped = load_fairseq_bin(model, args.model, ctc=True, sr=sr)
 
 
 else:
-    model = Wav2Vec2Model(conv_features=CONV_FEATURES[sr], num_vq_vars=args.num_vq_vars, num_vq_groups=args.num_vq_groups,
-                          num_layers=args.num_layers, num_heads=args.num_heads, d_ff=args.d_ff, d_model=args.d_model,
-                          final_dim=args.final_dim)
+    model = Wav2Vec2Model(
+        conv_features=CONV_FEATURES[sr],
+        num_vq_vars=args.num_vq_vars,
+        num_vq_groups=args.num_vq_groups,
+        num_layers=args.num_layers,
+        num_heads=args.num_heads,
+        d_ff=args.d_ff,
+        d_model=args.d_model,
+        final_dim=args.final_dim,
+    )
     unmapped = load_fairseq_bin(model, args.model)
 
 if unmapped['missing'] or unmapped['unexpected']:

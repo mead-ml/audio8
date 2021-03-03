@@ -16,6 +16,7 @@ def kenlm_model(model):
     :param model:
     :return:
     """
+
     def fn(hyp_next):
         if hyp_next.endswith(' .'):
             end_of_sentence = True
@@ -24,18 +25,23 @@ def kenlm_model(model):
 
         score = 10 ** model.score(hyp_next.replace(' .', ''), True, end_of_sentence)
         return score
+
     return fn
 
-def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
-                       beam: int = 10,
-                       min_thresh: float = 0.001,
-                       decoder_blank: str = '<s>',
-                       decoder_eow: str = '|',
-                       decoder_eos: str = '</s>',
-                       language_model: Optional[Callable] = None,
-                       alpha: float = 0.3,
-                       beta: float = 5.0,
-                       return_scores: bool = False):
+
+def prefix_beam_search(
+    probs: np.ndarray,
+    vocab: Dict[int, str],
+    beam: int = 10,
+    min_thresh: float = 0.001,
+    decoder_blank: str = '<s>',
+    decoder_eow: str = '|',
+    decoder_eos: str = '</s>',
+    language_model: Optional[Callable] = None,
+    alpha: float = 0.3,
+    beta: float = 5.0,
+    return_scores: bool = False,
+):
     """Use a prefix beam search (https://arxiv.org/pdf/1408.2873.pdf) to decode
 
     The implementation here is "Algorithm 1" from the paper, and is modified from
@@ -69,6 +75,7 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
 
     def score_hyp(s):
         return (p_non_blank[t][s] + p_blank[t][s]) * (length_s(s) ** beta)
+
     lm_prob = lambda x: 1 if not language_model else language_model(x)
 
     for t in range(1, T):
@@ -76,8 +83,8 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
         for hyp in A_prev:
             # If we hit the end of a sentence, already we need to propagate the probability through
             if len(hyp) > 0 and hyp[-1] == eos:
-                p_blank[t][hyp] += p_blank[t-1][hyp]
-                p_non_blank[t][hyp] += p_non_blank[t-1][hyp]
+                p_blank[t][hyp] += p_blank[t - 1][hyp]
+                p_non_blank[t][hyp] += p_non_blank[t - 1][hyp]
                 continue
 
             p_at_t = probs[t]
@@ -87,24 +94,28 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
                 v = vocab[c]
 
                 if v == decoder_blank:
-                    p_blank[t][hyp] += p_at_t[blank_idx] * (p_blank[t-1][hyp] + p_non_blank[t-1][hyp])
+                    p_blank[t][hyp] += p_at_t[blank_idx] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
 
                 else:
                     v = v.replace(decoder_eos, eos).replace(decoder_eow, eow)
                     hyp_next = hyp + v
 
                     if len(hyp) > 0 and v == hyp[-1]:
-                        p_non_blank[t][hyp_next] += p_at_t[c] * p_blank[t-1][hyp]
-                        p_non_blank[t][hyp] += p_at_t[c] * p_non_blank[t-1][hyp]
+                        p_non_blank[t][hyp_next] += p_at_t[c] * p_blank[t - 1][hyp]
+                        p_non_blank[t][hyp] += p_at_t[c] * p_non_blank[t - 1][hyp]
 
                     elif len(hyp.replace(' ', '')) > 0 and v in (eow, eos,):
                         p_lm = lm_prob(hyp_next.strip())
-                        p_non_blank[t][hyp_next] += (p_lm**alpha) * p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
+                        p_non_blank[t][hyp_next] += (
+                            (p_lm ** alpha) * p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
+                        )
                     else:
                         p_non_blank[t][hyp_next] += p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
 
                     if hyp_next not in A_prev:
-                        p_blank[t][hyp_next] += p_at_t[blank_idx] * (p_blank[t - 1][hyp_next] + p_non_blank[t - 1][hyp_next])
+                        p_blank[t][hyp_next] += p_at_t[blank_idx] * (
+                            p_blank[t - 1][hyp_next] + p_non_blank[t - 1][hyp_next]
+                        )
                         p_non_blank[t][hyp_next] += p_at_t[c] * p_non_blank[t - 1][hyp_next]
 
         A_next = p_blank[t] + p_non_blank[t]
@@ -115,6 +126,7 @@ def prefix_beam_search(probs: np.ndarray, vocab: Dict[int, str],
         return [(hyp.lower(), score_hyp(hyp)) for hyp in A_prev]
     return [hyp.lower() for hyp in A_prev]
 
+
 def postproc_letters(sentence):
     sentence = sentence.replace(" ", "").replace("|", " ").strip()
     return sentence
@@ -123,6 +135,7 @@ def postproc_letters(sentence):
 def ctc_metrics(lprobs_t, target, input_lengths, index2vocab):
     metrics = {}
     import editdistance
+
     BLANK_IDX = Offsets.GO
     with torch.no_grad():
 
@@ -131,15 +144,9 @@ def ctc_metrics(lprobs_t, target, input_lengths, index2vocab):
         w_errs = 0
         w_len = 0
         wv_errs = 0
-        for lp, t, inp_l in zip(
-                lprobs_t,
-                target,
-                input_lengths,
-        ):
+        for lp, t, inp_l in zip(lprobs_t, target, input_lengths,):
             lp = lp[:inp_l].unsqueeze(0)
-            p = (t != Offsets.PAD) & (
-                    t != Offsets.EOS
-            )
+            p = (t != Offsets.PAD) & (t != Offsets.EOS)
             targ = t[p]
             targ_units = [index2vocab[x.item()] for x in targ]
             targ_units_arr = targ.tolist()

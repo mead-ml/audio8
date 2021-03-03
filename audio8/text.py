@@ -3,9 +3,18 @@ from typing import Dict
 from baseline.vectorizers import BPEVectorizer1D
 from eight_mile.utils import Offsets
 import torch
-from eight_mile.pytorch.layers import EmbeddingsStack, TransformerEncoderStack, SingleHeadReduction, TwoHeadConcat, sequence_mask_mxlen, MeanPool1D, MaxPool1D
+from eight_mile.pytorch.layers import (
+    EmbeddingsStack,
+    TransformerEncoderStack,
+    SingleHeadReduction,
+    TwoHeadConcat,
+    sequence_mask_mxlen,
+    MeanPool1D,
+    MaxPool1D,
+)
 import torch.nn as nn
 import contextlib
+
 
 def read_vocab_file(vocab_file: str):
     vocab = []
@@ -30,10 +39,16 @@ class TextVectorizer:
         """
         return np.array([self.vocab[w] for w in text], dtype=np.int)
 
+
 class BPEVectorizer:
     def __init__(self, model_file, vocab_file, emit_begin_tok=[], emit_end_tok=[]):
-        self.internal = BPEVectorizer1D(model_file=model_file, vocab_file=vocab_file,
-                              emit_begin_tok=emit_begin_tok, emit_end_tok=emit_end_tok, transform_fn=str.lower)
+        self.internal = BPEVectorizer1D(
+            model_file=model_file,
+            vocab_file=vocab_file,
+            emit_begin_tok=emit_begin_tok,
+            emit_end_tok=emit_end_tok,
+            transform_fn=str.lower,
+        )
 
     @property
     def vocab(self):
@@ -60,37 +75,53 @@ class TextBoWPooledEncoder(nn.Module):
 
 
 class TextTransformerPooledEncoder(nn.Module):
-    def __init__(self,
-                 embeddings,
-                 d_model,
-                 d_ff,
-                 dropout,
-                 num_heads,
-                 num_layers,
-                 d_k=None,
-                 rpr_k=None,
-                 reduction_d_k=64,
-                 reduction_type='SHA',
-                 ffn_pdrop=0.1,
-                 windowed_ra=False,
-                 rpr_value_on=False):
+    def __init__(
+        self,
+        embeddings,
+        d_model,
+        d_ff,
+        dropout,
+        num_heads,
+        num_layers,
+        d_k=None,
+        rpr_k=None,
+        reduction_d_k=64,
+        reduction_type='SHA',
+        ffn_pdrop=0.1,
+        windowed_ra=False,
+        rpr_value_on=False,
+    ):
         super().__init__()
         self.embeddings = EmbeddingsStack({'x': embeddings})
-        self.transformer = TransformerEncoderStack(num_heads=num_heads, d_model=d_model,
-                                                   pdrop=dropout, layers=num_layers, activation='gelu', d_ff=d_ff,
-                                                   ffn_pdrop=ffn_pdrop,
-                                                   d_k=d_k, rpr_k=rpr_k, windowed_ra=windowed_ra, rpr_value_on=rpr_value_on)
+        self.transformer = TransformerEncoderStack(
+            num_heads=num_heads,
+            d_model=d_model,
+            pdrop=dropout,
+            layers=num_layers,
+            activation='gelu',
+            d_ff=d_ff,
+            ffn_pdrop=ffn_pdrop,
+            d_k=d_k,
+            rpr_k=rpr_k,
+            windowed_ra=windowed_ra,
+            rpr_value_on=rpr_value_on,
+        )
         self.output_dim = d_model
         reduction_type = reduction_type.lower()
         if reduction_type == "2ha":
-            self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k),
-                                                 nn.Linear(2*d_model, d_model))
+            self.reduction_layer = nn.Sequential(
+                TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k), nn.Linear(2 * d_model, d_model)
+            )
         elif reduction_type == "2ha_mean":
-            self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='mean'),
-                                                 nn.Linear(2*d_model, d_model))
+            self.reduction_layer = nn.Sequential(
+                TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='mean'),
+                nn.Linear(2 * d_model, d_model),
+            )
         elif reduction_type == "2ha_max":
-            self.reduction_layer = nn.Sequential(TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='max'),
-                                                 nn.Linear(2*d_model, d_model))
+            self.reduction_layer = nn.Sequential(
+                TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='max'),
+                nn.Linear(2 * d_model, d_model),
+            )
         elif reduction_type == "sha":
             self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k)
         elif reduction_type == "sha_mean":
