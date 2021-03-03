@@ -85,13 +85,12 @@ def train():
     parser.add_argument("--restart_tt", type=str, help="Optional param for legacy checkpoints", choices=['step', 'ignore'])
     parser.add_argument("--restart_from", type=str, help="Option allows you to restart from a previous checkpoint")
     parser.add_argument("--warmup_steps", type=int, default=10000, help="Num warmup steps")
-    parser.add_argument("--saves_per_epoch", type=int, default=10, help="The number of saves per epoch")
     parser.add_argument("--model_type", default="wav2vec2")
     parser.add_argument("--unfreeze_enc_after_step", default=10_000)
     parser.add_argument("--train_steps", type=int, default=400_000, help="Num training steps")
-    parser.add_argument("--valid_steps", type=int, default=1000, help="Num valid steps to evaluate each time")
-    parser.add_argument("--steps_per_update", type=int, default=100)
-    parser.add_argument("--steps_per_checkpoint", type=int, default=1000, help="The number of steps per checkpoint")
+    parser.add_argument("--valid_steps", type=int, default=1000, help="Valid steps to evaluate each time")
+    parser.add_argument("--steps_per_valid_update", type=int, default=10_000, help="How many steps of validation before we report metrics")
+    parser.add_argument("--steps_per_checkpoint", type=int, default=10_000, help="The number of steps per checkpoint")
     parser.add_argument("--verbose", type=str2bool, help="Verbose", default=False)
     parser.add_argument("--device", type=str,
                         default="cuda" if torch.cuda.is_available() else "cpu",
@@ -101,6 +100,7 @@ def train():
                         default=False,
                         help="Are we doing distributed training?")
     parser.add_argument("--vocab_file", help="Vocab for output decoding")
+    parser.add_argument("--early_stopping_metric", type=str, help="Use early stopping on the key specified")
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
     parser.add_argument("--local_rank",
                         type=int,
@@ -117,12 +117,18 @@ def train():
     # Setup logger
     logging.basicConfig(level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN)
     num_gpus = get_num_gpus_multiworker()
+
     args.distributed = args.distributed or num_gpus > 1
     logger.info(f"Using {num_gpus} GPUs in this job.")
 
     if args.distributed:
         args.device, updated_local_rank = init_distributed(args.local_rank)
         args.local_rank = updated_local_rank
+
+    if args.early_stopping_metric is not None:
+        logger.info(f"Using {args.early_stopping_metric} for early stopping")
+    else:
+        logger.info("Early stopping will be turned off")
 
     vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, args.dict_file)
     vocab = read_vocab_file(vocab_file)
@@ -150,9 +156,8 @@ def train():
     loss_function = CTCLoss().to(args.device)
     logger.info("Loaded model and loss")
 
-    update_on = args.steps_per_checkpoint
-    validate_on = min(args.train_steps//2, update_on * 10)
-    report_on = max(10, update_on) // 10
+    validate_on = min(args.train_steps//2, args.steps_per_checkpoint)
+    report_on = max(10, args.steps_per_checkpoint) // 10
     lr_decay = CosineDecaySchedulerPyTorch(decay_steps=args.train_steps, alpha=args.lr_alpha, lr=args.lr)
     linear_warmup = WarmupLinearSchedulerPyTorch(args.warmup_steps, lr=args.lr)
     lr_sched = CompositeLRScheduler(linear_warmup, lr_decay, lr=args.lr)
@@ -217,7 +222,8 @@ def train():
     step_time = Average('average_step_time')
     batch_sizes = Average('batch_size')
     model.train()
-
+    # All of our early stopping metrics currently need to be lower to be better, so set to high number initially
+    best_metric = 1e8
     for i in range(steps, args.train_steps):
 
         if steps > args.unfreeze_enc_after_step:
@@ -246,8 +252,6 @@ def train():
                 steps_per_sec = 1.0 / step_time.avg
                 logging.info('%s, steps/min %f, LR %.6f, avg batch size %.2f', avg_loss, steps_per_sec*60, optimizer.current_lr, batch_sizes.avg)
 
-            if (steps + 1) % update_on == 0 and args.local_rank < 1:
-                save_checkpoint(model, model_base, steps, tick_type='step')
             if (steps + 1) % validate_on == 0 and args.local_rank < 1:
                 train_token_loss = avg_loss.avg
                 metrics['average_train_loss'] = train_token_loss
@@ -280,12 +284,17 @@ def train():
                         valid_metrics['valid_elapsed_epoch'] = elapsed
                         valid_metrics['cer'] = (c_errors / c_total) * 100
                         valid_metrics['wer'] = (w_errors / w_total) * 100
-                        if j % args.steps_per_update == 0:
+                        if j > 0 and j % args.steps_per_valid_update == 0:
                             logger.info(valid_metrics)
                     except Exception as e:
                         logger.error(e)
 
                 logger.info(metrics)
+                save_checkpoint(model, model_base, steps, tick_type='step')
+                if args.early_stopping_metric and valid_metrics[args.early_stopping_metric] < best_metric:
+                    best_metric = valid_metrics[args.early_stopping_metric]
+                    logger.info("New best metric %.4f", best_metric)
+                    save_checkpoint(model, model_base, 0, tick_type='best')
                 model.train()
         except Exception as e:
             logger.error(e)
