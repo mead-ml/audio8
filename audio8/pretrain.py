@@ -42,6 +42,7 @@ def train():
     parser.add_argument("--tokens_per_batch", type=int, default=1_400_000, help="Number of tokens per batch")
     parser.add_argument("--max_sample_len", type=int, default=325_000, help="Max sample length")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
+    parser.add_argument("--layer_drop", type=float, default=0.0, help="Layer Dropout")
     parser.add_argument("--lr_scheduler", type=str, default='cosine', help="The type of learning rate decay scheduler")
     parser.add_argument("--lr_decay_steps", type=int, help="decay steps of lr scheduler")
     parser.add_argument("--lr_decay_rate", type=float, help="decay rate of lr scheduler")
