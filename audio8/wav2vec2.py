@@ -230,6 +230,7 @@ def create_model(
     channel_masking=0.0,
     timestep_mask_len=10,
     channel_mask_len=64,
+    layer_drop=0.0,
     **kwargs,
 ):
     model = Wav2Vec2Model(
@@ -251,6 +252,7 @@ def create_model(
         channel_masking,
         timestep_mask_len,
         channel_mask_len,
+        layer_drop,
     )
     return model
 
@@ -268,6 +270,7 @@ def create_acoustic_model(
     channel_masking=0.1,
     timestep_mask_len=10,
     channel_mask_len=64,
+    layer_drop=0.0,
     **kwargs,
 ):
     model = Wav2Vec2AcousticModel(
@@ -284,6 +287,7 @@ def create_acoustic_model(
         channel_masking,
         timestep_mask_len,
         channel_mask_len,
+        layer_drop,
     )
     return model
 
@@ -303,6 +307,7 @@ def create_paired_model(
     audio_channel_masking=0.1,
     audio_timestep_mask_len=10,
     audio_channel_mask_len=64,
+    audio_layer_drop=0.0,
     text_d_model=512,
     text_num_heads=8,
     text_num_layers=8,
@@ -332,6 +337,7 @@ def create_paired_model(
         channel_masking=audio_channel_masking,
         timestep_mask_len=audio_timestep_mask_len,
         channel_mask_len=audio_channel_mask_len,
+        layer_drop=audio_layer_drop,
     )
 
     if text_encoder_type == 'transformer':
@@ -560,6 +566,7 @@ class AudioTransformerEncoder(nn.Module):
         d_ff: Optional[int] = None,
         conv_pos_kernel: int = 128,
         conv_groups: int = 16,
+        layer_drop: float = 0.0,
         **kwargs,
     ):
         super().__init__()
@@ -590,6 +597,7 @@ class AudioTransformerEncoder(nn.Module):
             activation=activation,
             layer_norms_after=True,
             d_ff=d_ff,
+            layer_drop=layer_drop,
         )
         self.ln = nn.LayerNorm(self.d_model)
 
@@ -642,6 +650,7 @@ class Wav2Vec2Encoder(nn.Module):
         channel_masking=0.1,
         timestep_mask_len=10,
         channel_mask_len=64,
+        layer_drop=0.0,
     ):
         super().__init__()
         fx_dsz = conv_features[-1][0]
@@ -651,7 +660,7 @@ class Wav2Vec2Encoder(nn.Module):
 
         self.feature_extractor = ConvFeatureExtractionModel(conv_features)
         self.proj_to_input = Dense(fx_dsz, d_model)
-        self.encoder = AudioTransformerEncoder(num_heads, d_model, dropout, num_layers, d_ff=d_ff)
+        self.encoder = AudioTransformerEncoder(num_heads, d_model, dropout, num_layers, d_ff=d_ff, layer_drop=layer_drop)
         self.mask_emb = nn.Parameter(torch.FloatTensor(d_model).uniform_())
         self.timestep_masking = timestep_masking
         self.channel_masking = channel_masking
@@ -704,6 +713,7 @@ class Wav2Vec2AcousticModel(nn.Module):
         channel_masking=0.1,
         timestep_mask_len=10,
         channel_mask_len=64,
+        layer_drop=0.0,
     ):
         super().__init__()
         self.encoder = Wav2Vec2Encoder(
@@ -719,6 +729,7 @@ class Wav2Vec2AcousticModel(nn.Module):
             channel_masking,
             timestep_mask_len,
             channel_mask_len,
+            layer_drop,
         )
         self.proj = pytorch_linear(d_model, num_labels)
         self.freeze = True
@@ -746,6 +757,7 @@ class Wav2Vec2PooledEncoder(nn.Module):
         channel_masking=0.1,
         timestep_mask_len=10,
         channel_mask_len=64,
+        layer_drop=0.0,
         reduction_type='SHA',
         reduction_d_k=64,
     ):
@@ -763,6 +775,7 @@ class Wav2Vec2PooledEncoder(nn.Module):
             channel_masking,
             timestep_mask_len,
             channel_mask_len,
+            layer_drop,
         )
         self.output_dim = self.encoder.output_dim
         reduction_type = reduction_type.lower()
@@ -835,6 +848,7 @@ class Wav2Vec2Model(nn.Module):
         channel_masking=0.0,
         timestep_mask_len=10,
         channel_mask_len=64,
+        layer_drop=0.0,
     ):
         super().__init__()
         fx_dsz = conv_features[-1][0]
@@ -847,7 +861,7 @@ class Wav2Vec2Model(nn.Module):
         self.quantizer = GumbelVectorQuantizer(
             fx_dsz, num_vq_vars, start_temp, end_temp, temp_decay_factor, num_vq_groups, final_dim
         )
-        self.encoder = AudioTransformerEncoder(num_heads, d_model, dropout, num_layers, d_ff=d_ff)
+        self.encoder = AudioTransformerEncoder(num_heads, d_model, dropout, num_layers, d_ff=d_ff, layer_drop=layer_drop)
         self.project_q = Dense(final_dim, final_dim)
         self.final_proj = Dense(d_model, final_dim)
         self.timestep_masking = timestep_masking
