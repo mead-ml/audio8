@@ -84,7 +84,7 @@ def train():
     parser.add_argument("--warmup_steps", type=int, default=10000, help="Num warmup steps")
     parser.add_argument("--plateau_steps", type=int, default=0, help="Num plateau steps")
     parser.add_argument("--model_type", default="wav2vec2")
-    parser.add_argument("--unfreeze_enc_after_step", default=10_000)
+    parser.add_argument("--unfreeze_enc_after_step", default=10_000, type=int)
     parser.add_argument(
         "--timestep_masking", type=float, default=0.5, help="Timestep masking prob, gets divided by timestep_mask_len"
     )
