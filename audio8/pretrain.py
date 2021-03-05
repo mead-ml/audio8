@@ -65,6 +65,7 @@ def train():
 
     parser.add_argument("--restart_from", type=str, help="Option allows you to restart from a previous checkpoint")
     parser.add_argument("--warmup_steps", type=int, default=10000, help="Num warmup steps")
+    parser.add_argument("--plateau_steps", type=int, default=0, help="Num plateau steps")
     parser.add_argument("--steps_per_checkpoint", type=int, default=1000, help="The number of steps per checkpoint")
     parser.add_argument("--preprocessed", type=str2bool, default=True, help="Has the data already been preprocessed?")
     parser.add_argument("--model_type", default="wav2vec2")
@@ -117,7 +118,7 @@ def train():
     report_on = max(10, update_on) // 10
     lr_decay = CosineDecaySchedulerPyTorch(decay_steps=args.train_steps, alpha=args.lr_alpha, lr=args.lr)
     linear_warmup = WarmupLinearSchedulerPyTorch(args.warmup_steps, lr=args.lr)
-    lr_sched = CompositeLRScheduler(linear_warmup, lr_decay, lr=args.lr)
+    lr_sched = CompositeLRScheduler(linear_warmup, lr_decay, args.plateau_steps, lr=args.lr)
 
     global_step = 0
     if args.restart_from:

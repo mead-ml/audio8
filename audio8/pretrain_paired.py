@@ -99,6 +99,7 @@ def train():
     )
     parser.add_argument("--restart_from", type=str, help="Option allows you to restart from a previous checkpoint")
     parser.add_argument("--warmup_steps", type=int, default=10000, help="Num warmup steps")
+    parser.add_argument("--plateau_steps", type=int, default=0, help="Num plateau steps")
     parser.add_argument("--saves_per_epoch", type=int, default=10, help="The number of saves per epoch")
     parser.add_argument("--model_type", default="wav2vec2")
     parser.add_argument("--audio_unfreeze_after_step", default=100_000, type=int)
@@ -203,7 +204,7 @@ def train():
     report_on = max(10, update_on) // 10
     lr_decay = CosineDecaySchedulerPyTorch(decay_steps=args.train_steps, alpha=args.lr_alpha, lr=args.lr)
     linear_warmup = WarmupLinearSchedulerPyTorch(args.warmup_steps, lr=args.lr)
-    lr_sched = CompositeLRScheduler(linear_warmup, lr_decay, lr=args.lr)
+    lr_sched = CompositeLRScheduler(linear_warmup, lr_decay, args.plateau_steps, lr=args.lr)
 
     global_step = 0
     if args.restart_from:
