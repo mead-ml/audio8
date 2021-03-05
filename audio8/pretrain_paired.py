@@ -12,16 +12,18 @@ import random
 from audio8.data import AudioTextLetterDataset
 from audio8.text import BPEVectorizer, TextTransformerPooledEncoder, TextBoWPooledEncoder
 from audio8.wav2vec2 import create_paired_model
+import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from eight_mile.pytorch.serialize import load_tlm_npz
 from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, revlut
 from baseline.pytorch.embeddings import *
 import baseline.embeddings
-from eight_mile.optz import *
+from eight_mile.pytorch.optz import OptimizerManager
 from eight_mile.utils import Offsets
 from eight_mile.pytorch.layers import save_checkpoint, init_distributed, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
+from audio8.utils import create_lrs
 
 logger = logging.getLogger(__file__)
 
@@ -87,8 +89,6 @@ def train():
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
     parser.add_argument("--layer_drop", type=float, default=0.0, help="Layer Dropout")
     parser.add_argument("--lr_scheduler", type=str, default='cosine', help="The type of learning rate decay scheduler")
-    parser.add_argument("--lr_decay_steps", type=int, help="decay steps of lr scheduler")
-    parser.add_argument("--lr_decay_rate", type=float, help="decay rate of lr scheduler")
     parser.add_argument("--lr_alpha", type=float, default=0.0, help="parameter alpha for cosine decay scheduler")
     parser.add_argument("--optim", default="adamw", type=str, help="Optimizer to use (defaults to adamw)")
     parser.add_argument("--lr", type=float, default=2.0e-5, help="Learning rate")
@@ -99,6 +99,7 @@ def train():
     )
     parser.add_argument("--restart_from", type=str, help="Option allows you to restart from a previous checkpoint")
     parser.add_argument("--warmup_steps", type=int, default=10000, help="Num warmup steps")
+    parser.add_argument("--plateau_steps", type=int, default=0, help="Num plateau steps")
     parser.add_argument("--saves_per_epoch", type=int, default=10, help="The number of saves per epoch")
     parser.add_argument("--model_type", default="wav2vec2")
     parser.add_argument("--audio_unfreeze_after_step", default=100_000, type=int)
@@ -201,9 +202,8 @@ def train():
     update_on = args.steps_per_checkpoint
     validate_on = min(args.train_steps // 2, update_on * 10)
     report_on = max(10, update_on) // 10
-    lr_decay = CosineDecaySchedulerPyTorch(decay_steps=args.train_steps, alpha=args.lr_alpha, lr=args.lr)
-    linear_warmup = WarmupLinearSchedulerPyTorch(args.warmup_steps, lr=args.lr)
-    lr_sched = CompositeLRScheduler(linear_warmup, lr_decay, lr=args.lr)
+    lr_sched = create_lrs(args.lr, args.train_steps, args.lr_scheduler,
+                          alpha=args.lr_alpha, warmup_steps=args.warmup_steps, plateau_steps=args.plateau_steps)
 
     global_step = 0
     if args.restart_from:
