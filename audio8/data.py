@@ -125,6 +125,7 @@ class AudioTextLetterDataset(IterableDataset):
         tgt_type=TGT_LETTER,
         input_sample_rate=16_000,
         target_sample_rate=16_000,
+        is_infinite=True,
     ):
         super().__init__()
         self.sample_factor = target_sample_rate / input_sample_rate
@@ -150,6 +151,7 @@ class AudioTextLetterDataset(IterableDataset):
             self.world_size = torch.distributed.get_world_size()
 
         self._read_tsv_file(tsv_file)
+        self.is_infinite = is_infinite
 
     def _read_transcription(self, transcription):
         return transcription.split()
@@ -229,9 +231,20 @@ class AudioTextLetterDataset(IterableDataset):
         return read_file_order, node_worker_id
 
     def __iter__(self):
+
         read_order, _ = self._init_read_order()
         # If we have multiple files per worker, possibly shuffle the file read order
-        while True:
+        if self.is_infinite:
+            while True:
+                if self.shuffle:
+                    random.shuffle(read_order)
+                for rd in read_order:
+                    batch = self.batches[rd]
+                    batch = self.read_batch(batch)
+                    yield batch['signal'], batch['signal_lengths'], batch['token_ids'], batch['token_lengths'], batch[
+                        'files'
+                    ]
+        else:
             if self.shuffle:
                 random.shuffle(read_order)
             for rd in read_order:
@@ -240,6 +253,8 @@ class AudioTextLetterDataset(IterableDataset):
                 yield batch['signal'], batch['signal_lengths'], batch['token_ids'], batch['token_lengths'], batch[
                     'files'
                 ]
+
+
 
     def read_batch(self, batch):
         zp_text = np.ones((len(batch), self.max_dst_length), dtype=np.long)

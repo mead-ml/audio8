@@ -166,6 +166,7 @@ def train():
         target_sample_rate=args.target_sample_rate,
         distribute=False,
         shuffle=False,
+        is_infinite=False,
     )
     train_loader = DataLoader(train_set, batch_size=None)  # , num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
