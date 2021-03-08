@@ -651,6 +651,7 @@ class Wav2Vec2Encoder(nn.Module):
         timestep_mask_len=10,
         channel_mask_len=64,
         layer_drop=0.0,
+        freeze_fx=True,
     ):
         super().__init__()
         fx_dsz = conv_features[-1][0]
@@ -667,9 +668,11 @@ class Wav2Vec2Encoder(nn.Module):
         self.timestep_mask_len = timestep_mask_len
         self.channel_mask_len = channel_mask_len
         self.output_dim = d_model
+        self.freeze_fx = freeze_fx
 
     def forward(self, x, pad_mask=None):
-        fx = self.feature_extractor(x)
+        with torch.no_grad() if self.freeze_fx else contextlib.ExitStack():
+            fx = self.feature_extractor(x)
         fx = fx.transpose(1, 2)
 
         features = self.layer_norm(fx)
