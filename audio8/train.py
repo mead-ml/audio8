@@ -61,7 +61,7 @@ def train():
     parser.add_argument("--target_sample_rate", type=int, default=16_000)
     parser.add_argument("--dict_file", type=str, help="Dictionary file", default='dict.ltr.txt')
     parser.add_argument("--dataset_key", default="LibriSpeech", help="dataset key for basedir")
-    parser.add_argument("--grad_accum", type=int, default=1)
+    parser.add_argument("--grad_accum", type=int, default=2)
     parser.add_argument("--d_model", type=int, default=768, help="Model dimension (and embedding dsz)")
     parser.add_argument("--d_ff", type=int, default=3072, help="FFN dimension")
     parser.add_argument("--d_k", type=int, default=None, help="Dimension per head.  Use if num_heads=1 to reduce dims")
@@ -74,9 +74,9 @@ def train():
     parser.add_argument("--lr_scheduler", type=str, default='cosine', help="The type of learning rate decay scheduler")
     parser.add_argument("--lr_alpha", type=float, default=0.0, help="parameter alpha for cosine decay scheduler")
     parser.add_argument("--optim", default="adamw", type=str, help="Optimizer to use (defaults to adamw)")
-    parser.add_argument("--lr", type=float, default=2.0e-5, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=1.0e-4, help="Learning rate")
     parser.add_argument("--clip", type=float, default=25.0, help="Clipping gradient norm")
-    parser.add_argument("--weight_decay", type=float, default=1.0e-2, help="Weight decay")
+    parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay")
     parser.add_argument(
         "--restart_tt", type=str, help="Optional param for legacy checkpoints", choices=['step', 'ignore']
     )
@@ -93,15 +93,9 @@ def train():
         "--channel_masking", type=float, default=0.1, help="Channel masking prob, gets divided by channel_mask_len"
     )
     parser.add_argument("--channel_mask_len", type=int, default=64, help="Num consecutive channels to mask")
-    parser.add_argument("--train_steps", type=int, default=400_000, help="Num training steps")
-    parser.add_argument("--valid_steps", type=int, default=1000, help="Valid steps to evaluate each time")
-    parser.add_argument(
-        "--steps_per_valid_update",
-        type=int,
-        default=10_000,
-        help="How many steps of validation before we report metrics",
-    )
-    parser.add_argument("--steps_per_checkpoint", type=int, default=10_000, help="The number of steps per checkpoint")
+    parser.add_argument("--train_steps", type=int, default=320_000, help="Num training steps")
+    parser.add_argument("--valid_steps", type=int, default=1000, help="Maximum number of valid steps to evaluate each time")
+    parser.add_argument("--steps_per_checkpoint", type=int, default=2400, help="The number of steps per checkpoint")
     parser.add_argument("--verbose", type=str2bool, help="Verbose", default=False)
     parser.add_argument(
         "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)"
@@ -327,12 +321,11 @@ def train():
                         valid_metrics['valid_elapsed_epoch'] = elapsed
                         valid_metrics['cer'] = (c_errors / c_total) * 100
                         valid_metrics['wer'] = (w_errors / w_total) * 100
-                        if j > 0 and j % args.steps_per_valid_update == 0:
-                            logger.info(valid_metrics)
+
                     except Exception as e:
                         logger.error(e)
-
                 logger.info(metrics)
+                logger.info(valid_metrics)
                 save_checkpoint(model, model_base, steps, tick_type='step')
                 if args.early_stopping_metric and valid_metrics[args.early_stopping_metric] < best_metric:
                     best_metric = valid_metrics[args.early_stopping_metric]
