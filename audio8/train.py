@@ -247,6 +247,8 @@ def train():
     # All of our early stopping metrics currently need to be lower to be better, so set to high number initially
     best_metric = 1e8
     iters = 0
+    last_validation_step = -1
+    last_report_step = -1
     optimizer.zero_grad()
     while optimizer.global_step < args.train_steps:
 
@@ -271,7 +273,8 @@ def train():
             elapsed = time.time() - start
             step_time.update(elapsed)
 
-            if (optimizer.global_step + 1) % report_on == 0:
+            if (optimizer.global_step + 1) % report_on == 0 and optimizer.global_step != last_report_step:
+                last_report_step = optimizer.global_step
                 steps_per_sec = 1.0 / step_time.avg
                 logging.info(
                     '%s, steps/min %f, LR %.6f, avg batch size %.2f',
@@ -281,7 +284,8 @@ def train():
                     batch_sizes.avg,
                 )
 
-            if (optimizer.global_step + 1) % validate_on == 0 and args.local_rank < 1:
+            if (optimizer.global_step + 1) % validate_on == 0 and optimizer.global_step != last_validation_step and args.local_rank < 1:
+                last_validation_step = optimizer.global_step
                 train_token_loss = avg_loss.avg
                 metrics['average_train_loss'] = train_token_loss
                 avg_valid_loss = Average('average_valid_loss')
