@@ -238,7 +238,6 @@ def train():
     else:
         _model = model
     model_base = os.path.join(args.basedir, 'checkpoint')
-    steps = global_step
 
     train_itr = iter(train_loader)
     avg_loss = Average('average_train_loss')
@@ -247,31 +246,32 @@ def train():
     model.train()
     # All of our early stopping metrics currently need to be lower to be better, so set to high number initially
     best_metric = 1e8
-    for i in range(steps, args.train_steps):
+    iters = 0
+    optimizer.zero_grad()
+    while optimizer.global_step < args.train_steps:
 
-        if steps > args.unfreeze_enc_after_step:
+        if optimizer.global_step > args.unfreeze_enc_after_step:
             _model.freeze = False
         metrics = {}
-        optimizer.zero_grad()
         start = time.time()
         # This loader will iterate for ever
         batch = next(train_itr)
 
         loss, step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose)
         batch_sizes.update(step_metrics['batch_size'])
-        steps += 1
+        iters += 1
 
         try:
             avg_loss.update(loss.item())
             loss.backward()
-            if steps % args.grad_accum == 0:
+            if iters % args.grad_accum == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
                 optimizer.step()
                 optimizer.zero_grad()
             elapsed = time.time() - start
             step_time.update(elapsed)
 
-            if (steps + 1) % report_on == 0:
+            if (optimizer.global_step + 1) % report_on == 0:
                 steps_per_sec = 1.0 / step_time.avg
                 logging.info(
                     '%s, steps/min %f, LR %.6f, avg batch size %.2f',
@@ -281,7 +281,7 @@ def train():
                     batch_sizes.avg,
                 )
 
-            if (steps + 1) % validate_on == 0 and args.local_rank < 1:
+            if (optimizer.global_step + 1) % validate_on == 0 and args.local_rank < 1:
                 train_token_loss = avg_loss.avg
                 metrics['average_train_loss'] = train_token_loss
                 avg_valid_loss = Average('average_valid_loss')
@@ -326,7 +326,7 @@ def train():
                         logger.error(e)
                 logger.info(metrics)
                 logger.info(valid_metrics)
-                save_checkpoint(model, model_base, steps, tick_type='step')
+                save_checkpoint(model, model_base, optimizer.global_step, tick_type='step')
                 if args.early_stopping_metric and valid_metrics[args.early_stopping_metric] < best_metric:
                     best_metric = valid_metrics[args.early_stopping_metric]
                     logger.info("New best metric %.4f", best_metric)
