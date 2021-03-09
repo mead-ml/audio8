@@ -26,7 +26,7 @@ Offsets.VALUES[Offsets.EOS] = '</s>'
 Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 
-def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True):
+def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True, decoder_eow='|'):
     inputs, input_lengths, targets, target_lengths, _ = batch
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
@@ -46,7 +46,7 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
             for logits, input_lengths in zip(logits_batch, input_lengths_batch):
                 input_lengths = input_lengths.item()
                 probs = logits.exp().cpu().numpy()
-                transcription = prefix_beam_search(probs[:input_lengths, :], index2vocab, beam=1)[0]
+                transcription = prefix_beam_search(probs[:input_lengths, :], index2vocab, beam=1, decoder_eow=decoder_eow)[0]
                 print(transcription)
     return loss, metrics
 
@@ -174,7 +174,8 @@ def train():
 
     num_labels = len(vocab)
     model = create_acoustic_model(num_labels, args.target_sample_rate // 1000, **vars(args)).to(args.device)
-
+    print(args.target_type)
+    decoder_eow = ' ' if args.target_type == 'bpe' else '|'
     loss_function = CTCLoss(reduction_type=args.loss_reduction_type).to(args.device)
     logger.info("Loaded model and loss")
 
@@ -264,7 +265,7 @@ def train():
         # This loader will iterate for ever
         batch = next(train_itr)
 
-        loss, step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose)
+        loss, step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose, decoder_eow=decoder_eow)
         batch_sizes.update(step_metrics['batch_size'])
         iters += 1
 
@@ -318,6 +319,7 @@ def train():
                                 args.device,
                                 verbose=args.verbose,
                                 training=False,
+                                decoder_eow=decoder_eow,
                             )
                         c_errors += valid_step_metrics['c_errors']
                         w_errors += valid_step_metrics['w_errors']
