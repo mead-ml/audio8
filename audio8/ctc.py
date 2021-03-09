@@ -128,11 +128,17 @@ def prefix_beam_search(
 
 
 def postproc_letters(sentence):
+    sentence = ''.join(sentence)
     sentence = sentence.replace(" ", "").replace("|", " ").strip()
     return sentence
 
+def postproc_bpe(sentence):
+    sentence = ' '.join(sentence)
+    sentence = sentence.replace("@@ ", "").strip()
+    return sentence
 
-def ctc_metrics(lprobs_t, target, input_lengths, index2vocab):
+
+def ctc_metrics(lprobs_t, target, input_lengths, index2vocab, postproc_fn=postproc_letters):
     metrics = {}
     import editdistance
 
@@ -157,10 +163,10 @@ def ctc_metrics(lprobs_t, target, input_lengths, index2vocab):
             c_err += editdistance.eval(pred_units_arr, targ_units_arr)
             c_len += len(targ_units_arr)
 
-            targ_words = postproc_letters(''.join(targ_units)).split()
+            targ_words = postproc_fn(targ_units).split()
 
             pred_units = [index2vocab[x] for x in pred_units_arr]
-            pred_words_raw = postproc_letters(''.join(pred_units)).split()
+            pred_words_raw = postproc_fn(pred_units).split()
 
             dist = editdistance.eval(pred_words_raw, targ_words)
             w_errs += dist

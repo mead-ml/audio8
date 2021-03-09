@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, Offsets, revlut
 from eight_mile.pytorch.layers import save_checkpoint, init_distributed, sequence_mask, find_latest_checkpoint
 from eight_mile.pytorch.optz import OptimizerManager
-from audio8.ctc import CTCLoss, ctc_metrics, prefix_beam_search
+from audio8.ctc import CTCLoss, ctc_metrics, prefix_beam_search, postproc_bpe, postproc_letters
 from audio8.utils import create_lrs
 
 logger = logging.getLogger(__file__)
@@ -26,7 +26,10 @@ Offsets.VALUES[Offsets.EOS] = '</s>'
 Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 
-def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True, decoder_eow='|'):
+def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True, use_bpe=False):
+    decoder_eow = '|' if not use_bpe else ' '
+    postproc_fn = postproc_letters if not use_bpe else postproc_bpe
+
     inputs, input_lengths, targets, target_lengths, _ = batch
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
@@ -39,7 +42,7 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
     metrics['batch_size'] = inputs.shape[0]
     if not training:
 
-        metrics = ctc_metrics(logits, targets, input_lengths, index2vocab)
+        metrics = ctc_metrics(logits, targets, input_lengths, index2vocab, postproc_fn=postproc_fn)
         if verbose:
             input_lengths_batch = pad_mask.sum(-1)
             logits_batch = logits
@@ -175,7 +178,7 @@ def train():
     num_labels = len(vocab)
     model = create_acoustic_model(num_labels, args.target_sample_rate // 1000, **vars(args)).to(args.device)
     print(args.target_type)
-    decoder_eow = ' ' if args.target_type == 'bpe' else '|'
+    use_bpe = True if args.target_type == 'bpe' else False
     loss_function = CTCLoss(reduction_type=args.loss_reduction_type).to(args.device)
     logger.info("Loaded model and loss")
 
@@ -265,7 +268,7 @@ def train():
         # This loader will iterate for ever
         batch = next(train_itr)
 
-        loss, step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose, decoder_eow=decoder_eow)
+        loss, step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose, use_bpe=use_bpe)
         batch_sizes.update(step_metrics['batch_size'])
         iters += 1
 
@@ -319,7 +322,7 @@ def train():
                                 args.device,
                                 verbose=args.verbose,
                                 training=False,
-                                decoder_eow=decoder_eow,
+                                use_bpe=use_bpe,
                             )
                         c_errors += valid_step_metrics['c_errors']
                         w_errors += valid_step_metrics['w_errors']
