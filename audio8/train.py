@@ -59,9 +59,10 @@ def train():
     parser.add_argument("--valid_dataset", type=str, help='Dataset (by name), e.g. dev-other')
     parser.add_argument("--input_sample_rate", type=int, default=16_000)
     parser.add_argument("--target_sample_rate", type=int, default=16_000)
-    parser.add_argument("--dict_file", type=str, help="Dictionary file", default='dict.ltr.txt')
+    parser.add_argument("--dict_file", type=str, help="Dictionary file", default='dict.{}.txt')
     parser.add_argument("--dataset_key", default="LibriSpeech", help="dataset key for basedir")
     parser.add_argument("--grad_accum", type=int, default=2)
+    parser.add_argument("--loss_reduction_type", type=str, default="sum", choices=["sum", "mean"])
     parser.add_argument("--d_model", type=int, default=768, help="Model dimension (and embedding dsz)")
     parser.add_argument("--d_ff", type=int, default=3072, help="FFN dimension")
     parser.add_argument("--d_k", type=int, default=None, help="Dimension per head.  Use if num_heads=1 to reduce dims")
@@ -104,6 +105,7 @@ def train():
     parser.add_argument("--vocab_file", help="Vocab for output decoding")
     parser.add_argument("--early_stopping_metric", type=str, help="Use early stopping on the key specified")
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
+    parser.add_argument("--target_type", type=str, choices=["wrd", "ltr", "bpe"], default="ltr")
     parser.add_argument(
         "--local_rank",
         type=int,
@@ -113,6 +115,7 @@ def train():
 
     args = parser.parse_args()
 
+    args.dict_file = args.dict_file.format(args.target_type)
     # Get the basedir to save results and checkpoints
     if args.basedir is None:
         args.basedir = f'{args.model_type}-{args.dataset_key}-{os.getpid()}'
@@ -150,6 +153,7 @@ def train():
         target_sample_rate=args.target_sample_rate,
         shuffle=True,
         distribute=args.distributed,
+        tgt_type=args.target_type,
     )
     valid_set = AudioTextLetterDataset(
         valid_dataset,
@@ -161,6 +165,7 @@ def train():
         distribute=False,
         shuffle=False,
         is_infinite=False,
+        tgt_type=args.target_type,
     )
     train_loader = DataLoader(train_set, batch_size=None)  # , num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
@@ -170,7 +175,7 @@ def train():
     num_labels = len(vocab)
     model = create_acoustic_model(num_labels, args.target_sample_rate // 1000, **vars(args)).to(args.device)
 
-    loss_function = CTCLoss().to(args.device)
+    loss_function = CTCLoss(reduction_type=args.loss_reduction_type).to(args.device)
     logger.info("Loaded model and loss")
 
     validate_on = min(args.train_steps // 2, args.steps_per_checkpoint)

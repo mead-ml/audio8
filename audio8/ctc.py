@@ -177,9 +177,10 @@ def ctc_metrics(lprobs_t, target, input_lengths, index2vocab):
 
 
 class CTCLoss(torch.nn.Module):
-    def __init__(self, zero_infinity=True):
+    def __init__(self, zero_infinity=True, reduction_type="sum"):
         super().__init__()
         self.zero_infinity = zero_infinity
+        self.reduction_type = reduction_type
 
     def forward(self, log_prob, input_lengths, targets, target_lengths):
         pad_mask = (targets != Offsets.PAD) & (targets != Offsets.EOS)
@@ -192,7 +193,7 @@ class CTCLoss(torch.nn.Module):
                 input_lengths,
                 target_lengths,
                 blank=Offsets.GO,
-                reduction="sum",
+                reduction=self.reduction_type,
                 zero_infinity=self.zero_infinity,
             )
         return loss
