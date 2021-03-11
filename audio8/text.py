@@ -54,7 +54,7 @@ class BPEVectorizer:
             vocab_file=vocab_file,
             emit_begin_tok=emit_begin_tok,
             emit_end_tok=emit_end_tok,
-            transform_fn=str.lower,
+            #transform_fn=str.lower,
         )
 
     @property
