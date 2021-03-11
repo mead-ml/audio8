@@ -177,7 +177,6 @@ def train():
 
     num_labels = len(vocab)
     model = create_acoustic_model(num_labels, args.target_sample_rate // 1000, **vars(args)).to(args.device)
-    print(args.target_type)
     use_bpe = True if args.target_type == 'bpe' else False
     loss_function = CTCLoss(reduction_type=args.loss_reduction_type).to(args.device)
     logger.info("Loaded model and loss")
