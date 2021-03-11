@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, Offsets, revlut
 from eight_mile.pytorch.layers import save_checkpoint, init_distributed, sequence_mask, find_latest_checkpoint
 from eight_mile.pytorch.optz import OptimizerManager
-from audio8.ctc import CTCLoss, ctc_metrics, prefix_beam_search
+from audio8.ctc import CTCLoss, ctc_metrics, prefix_beam_search, postproc_bpe, postproc_letters
 from audio8.utils import create_lrs
 
 logger = logging.getLogger(__file__)
@@ -26,7 +26,10 @@ Offsets.VALUES[Offsets.EOS] = '</s>'
 Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 
-def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True):
+def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True, use_bpe=False):
+    decoder_eow = '|' if not use_bpe else ' '
+    postproc_fn = postproc_letters if not use_bpe else postproc_bpe
+
     inputs, input_lengths, targets, target_lengths, _ = batch
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
@@ -39,14 +42,14 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
     metrics['batch_size'] = inputs.shape[0]
     if not training:
 
-        metrics = ctc_metrics(logits, targets, input_lengths, index2vocab)
+        metrics = ctc_metrics(logits, targets, input_lengths, index2vocab, postproc_fn=postproc_fn)
         if verbose:
             input_lengths_batch = pad_mask.sum(-1)
             logits_batch = logits
             for logits, input_lengths in zip(logits_batch, input_lengths_batch):
                 input_lengths = input_lengths.item()
                 probs = logits.exp().cpu().numpy()
-                transcription = prefix_beam_search(probs[:input_lengths, :], index2vocab, beam=1)[0]
+                transcription = prefix_beam_search(probs[:input_lengths, :], index2vocab, beam=1, decoder_eow=decoder_eow)[0]
                 print(transcription)
     return loss, metrics
 
@@ -59,9 +62,10 @@ def train():
     parser.add_argument("--valid_dataset", type=str, help='Dataset (by name), e.g. dev-other')
     parser.add_argument("--input_sample_rate", type=int, default=16_000)
     parser.add_argument("--target_sample_rate", type=int, default=16_000)
-    parser.add_argument("--dict_file", type=str, help="Dictionary file", default='dict.ltr.txt')
+    parser.add_argument("--dict_file", type=str, help="Dictionary file", default='dict.{}.txt')
     parser.add_argument("--dataset_key", default="LibriSpeech", help="dataset key for basedir")
     parser.add_argument("--grad_accum", type=int, default=2)
+    parser.add_argument("--loss_reduction_type", type=str, default="sum", choices=["sum", "mean"])
     parser.add_argument("--d_model", type=int, default=768, help="Model dimension (and embedding dsz)")
     parser.add_argument("--d_ff", type=int, default=3072, help="FFN dimension")
     parser.add_argument("--d_k", type=int, default=None, help="Dimension per head.  Use if num_heads=1 to reduce dims")
@@ -104,6 +108,7 @@ def train():
     parser.add_argument("--vocab_file", help="Vocab for output decoding")
     parser.add_argument("--early_stopping_metric", type=str, help="Use early stopping on the key specified")
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
+    parser.add_argument("--target_type", type=str, choices=["wrd", "ltr", "bpe"], default="ltr")
     parser.add_argument(
         "--local_rank",
         type=int,
@@ -113,6 +118,7 @@ def train():
 
     args = parser.parse_args()
 
+    args.dict_file = args.dict_file.format(args.target_type)
     # Get the basedir to save results and checkpoints
     if args.basedir is None:
         args.basedir = f'{args.model_type}-{args.dataset_key}-{os.getpid()}'
@@ -150,6 +156,7 @@ def train():
         target_sample_rate=args.target_sample_rate,
         shuffle=True,
         distribute=args.distributed,
+        tgt_type=args.target_type,
     )
     valid_set = AudioTextLetterDataset(
         valid_dataset,
@@ -161,6 +168,7 @@ def train():
         distribute=False,
         shuffle=False,
         is_infinite=False,
+        tgt_type=args.target_type,
     )
     train_loader = DataLoader(train_set, batch_size=None)  # , num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
@@ -169,8 +177,8 @@ def train():
 
     num_labels = len(vocab)
     model = create_acoustic_model(num_labels, args.target_sample_rate // 1000, **vars(args)).to(args.device)
-
-    loss_function = CTCLoss().to(args.device)
+    use_bpe = True if args.target_type == 'bpe' else False
+    loss_function = CTCLoss(reduction_type=args.loss_reduction_type).to(args.device)
     logger.info("Loaded model and loss")
 
     validate_on = min(args.train_steps // 2, args.steps_per_checkpoint)
@@ -259,7 +267,7 @@ def train():
         # This loader will iterate for ever
         batch = next(train_itr)
 
-        loss, step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose)
+        loss, step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose, use_bpe=use_bpe)
         batch_sizes.update(step_metrics['batch_size'])
         iters += 1
 
@@ -313,6 +321,7 @@ def train():
                                 args.device,
                                 verbose=args.verbose,
                                 training=False,
+                                use_bpe=use_bpe,
                             )
                         c_errors += valid_step_metrics['c_errors']
                         w_errors += valid_step_metrics['w_errors']

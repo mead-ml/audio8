@@ -39,6 +39,13 @@ class TextVectorizer:
         """
         return np.array([self.vocab[w] for w in text], dtype=np.int)
 
+    @property
+    def emit_begin_tok(self):
+        return []
+
+    @property
+    def emit_end_tok(self):
+        return []
 
 class BPEVectorizer:
     def __init__(self, model_file, vocab_file, emit_begin_tok=[], emit_end_tok=[]):
@@ -47,8 +54,16 @@ class BPEVectorizer:
             vocab_file=vocab_file,
             emit_begin_tok=emit_begin_tok,
             emit_end_tok=emit_end_tok,
-            transform_fn=str.lower,
+            #transform_fn=str.lower,
         )
+
+    @property
+    def emit_begin_tok(self):
+        return self.internal.emit_begin_tok
+
+    @property
+    def emit_end_tok(self):
+        return self.internal.emit_begin_tok
 
     @property
     def vocab(self):
