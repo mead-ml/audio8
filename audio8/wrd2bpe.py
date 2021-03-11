@@ -11,6 +11,7 @@ parser.add_argument("--subword_model_file", type=str, help="The BPE model file",
 parser.add_argument("--subword_vocab_file", type=str, help="The BPE subword vocab", required=True)
 parser.add_argument("--emit_begin_tok", type=str, default=[])
 parser.add_argument("--emit_end_tok", type=str, default=[])
+parser.add_argument("--lower", action='store_true')
 args = parser.parse_args()
 
 
@@ -33,6 +34,9 @@ for inf, outf in zip(input_files, output_files):
     print(outf)
     with open(inf) as rf, open(outf, 'w') as wf:
         for line in rf:
-            tok = line.strip().lower().split()
+            line = line.strip()
+            if args.lower:
+                line = line.lower()
+            tok = line.split()
             outline = ' '.join([i2w[x] for x in vec.run(tok)])
             wf.write(outline + '\n')
