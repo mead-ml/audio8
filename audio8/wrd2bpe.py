@@ -9,8 +9,8 @@ parser.add_argument("--train_dataset", type=str, help='Dataset (by name), e.g. t
 parser.add_argument("--valid_dataset", type=str, help='Dataset (by name), e.g. dev-other')
 parser.add_argument("--subword_model_file", type=str, help="The BPE model file", required=True)
 parser.add_argument("--subword_vocab_file", type=str, help="The BPE subword vocab", required=True)
-parser.add_argument("--emit_begin_tok", type=str, default="<GO>")
-parser.add_argument("--emit_end_tok", type=str, default="<EOS>")
+parser.add_argument("--emit_begin_tok", type=str, default=[])
+parser.add_argument("--emit_end_tok", type=str, default=[])
 args = parser.parse_args()
 
 
