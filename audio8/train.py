@@ -72,7 +72,7 @@ def train():
     parser.add_argument("--num_heads", type=int, default=12, help="Number of heads")
     parser.add_argument("--num_layers", type=int, default=12, help="Number of layers")
     parser.add_argument("--num_train_workers", type=int, default=4, help="Number train workers")
-    parser.add_argument("--max_sample_len", type=int, default=325_000, help="Max sample length")
+    parser.add_argument("--max_sample_len", type=int, help="Max sample length")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
     parser.add_argument("--layer_drop", type=float, default=0.0, help="Layer Dropout")
     parser.add_argument("--lr_scheduler", type=str, default='cosine', help="The type of learning rate decay scheduler")

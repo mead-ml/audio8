@@ -118,7 +118,7 @@ class AudioTextLetterDataset(IterableDataset):
         tsv_file,
         vec,
         target_tokens_per_batch,
-        max_src_length,
+        max_src_length=None,
         distribute=True,
         shuffle=True,
         max_dst_length=1200,
@@ -176,7 +176,7 @@ class AudioTextLetterDataset(IterableDataset):
                     path = os.path.join(self.directory, basename)
                     x_length = int(int(x_length) * self.sample_factor)
 
-                    if x_length < self.min_src_length or x_length > self.max_src_length:
+                    if x_length < self.min_src_length or (self.max_src_length and x_length > self.max_src_length):
                         continue
                     text = self._read_transcription(transcription)
                     if self.tgt_type != AudioTextLetterDataset.TGT_BPE:
@@ -261,7 +261,7 @@ class AudioTextLetterDataset(IterableDataset):
 
     def read_batch(self, batch):
         zp_text = np.ones((len(batch), self.max_dst_length), dtype=np.long)
-        zp_audio = np.zeros((len(batch), self.max_src_length), dtype=np.float32)
+        audios = []
         audio_lengths = np.zeros(len(batch), dtype=np.int32)
         text_lengths = np.zeros(len(batch), dtype=np.long)
         files = []
@@ -274,13 +274,15 @@ class AudioTextLetterDataset(IterableDataset):
             len_text = min(self.max_dst_length, len(tokens))
             zp_text[i, :len_text] = tokens[:len_text]
             audio = self.process_sample(pth)
-            if len(audio) > self.max_src_length:
+            if self.max_src_length and len(audio) > self.max_src_length:
                 raise Exception(f'Unexpected audio length {len(audio)}.  Max should be {self.max_src_length}')
-            zp_audio[i, : len(audio)] = audio
+            audios.append(audio.squeeze())
             audio_lengths[i] = len(audio)
             text_lengths[i] = len_text
         mx_src_seen = audio_lengths.max()
-
+        zp_audio = np.zeros((len(batch), mx_src_seen), dtype=np.float32)
+        for i, audio in enumerate(audios):
+            zp_audio[i, :len(audio)] = audio
         mx_dst_seen = min(text_lengths.max(), self.max_dst_length)
         return {
             'signal': zp_audio[:, :mx_src_seen],
