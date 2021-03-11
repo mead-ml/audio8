@@ -109,6 +109,8 @@ def train():
     parser.add_argument("--early_stopping_metric", type=str, help="Use early stopping on the key specified")
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
     parser.add_argument("--target_type", type=str, choices=["wrd", "ltr", "bpe"], default="ltr")
+    parser.add_argument("--freeze_fx", type=str2bool, help="Freeze feature extractor", default=True)
+
     parser.add_argument(
         "--local_rank",
         type=int,
