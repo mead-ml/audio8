@@ -271,6 +271,7 @@ def create_acoustic_model(
     timestep_mask_len=10,
     channel_mask_len=64,
     layer_drop=0.0,
+    freeze_fx=True,
     **kwargs,
 ):
     model = Wav2Vec2AcousticModel(
@@ -288,6 +289,7 @@ def create_acoustic_model(
         timestep_mask_len,
         channel_mask_len,
         layer_drop,
+        freeze_fx,
     )
     return model
 
@@ -717,6 +719,7 @@ class Wav2Vec2AcousticModel(nn.Module):
         timestep_mask_len=10,
         channel_mask_len=64,
         layer_drop=0.0,
+        freeze_fx=True,
     ):
         super().__init__()
         self.encoder = Wav2Vec2Encoder(
@@ -733,6 +736,7 @@ class Wav2Vec2AcousticModel(nn.Module):
             timestep_mask_len,
             channel_mask_len,
             layer_drop,
+            freeze_fx=freeze_fx,
         )
         self.proj = pytorch_linear(d_model, num_labels)
         self.freeze = True
