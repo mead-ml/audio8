@@ -690,11 +690,11 @@ class Wav2Vec2Encoder(nn.Module):
         B, T, C = features.shape
 
         features = self.dropout_input(features)
-        if self.timestep_masking > 0.0:
+        if self.training and self.timestep_masking > 0.0:
             time_mask = create_mask((B, T), p_start=self.timestep_masking, mask_length=self.timestep_mask_len)
             time_mask = torch.from_numpy(time_mask).to(x.device)
             features[time_mask] = self.mask_emb
-        if self.channel_masking > 0.0:
+        if self.training and self.channel_masking > 0.0:
             channel_mask = create_mask((B, C), p_start=self.channel_masking, mask_length=self.channel_mask_len)
             channel_mask = torch.from_numpy(channel_mask).to(x.device).unsqueeze(1).expand(-1, T, -1)
             features[channel_mask] = 0
