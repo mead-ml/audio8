@@ -172,7 +172,7 @@ def train():
         is_infinite=False,
         tgt_type=args.target_type,
     )
-    train_loader = DataLoader(train_set, batch_size=None)  # , num_workers=args.num_train_workers)
+    train_loader = DataLoader(train_set, batch_size=None, num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
 
     logger.info("Loaded datasets")
