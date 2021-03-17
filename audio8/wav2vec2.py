@@ -15,7 +15,7 @@ from eight_mile.pytorch.layers import (
     TwoHeadConcat,
     SingleHeadReduction,
     BasicDualEncoderModel,
-    sequence_mask_mxlen,
+    sequence_mask,
 )
 from audio8.text import TextBoWPooledEncoder, TextTransformerPooledEncoder
 import contextlib
@@ -930,3 +930,18 @@ class Sampler:
         negs = y[neg_idxs.view(-1)]
         negs = negs.view(B, T, self.n_negatives, C).permute(2, 0, 1, 3)  # to NxBxTxC
         return negs, neg_idxs
+
+
+class Seq2Seq(nn.Module):
+    def __init__(self, encoder, decoder):
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+
+    def forward(self, input, pad_mask, dst, dst_lengths):
+        dst_mask = sequence_mask(dst_lengths)
+        encoded_input, pad_mask = self.encoder(input, pad_mask)
+        output = self.decoder(encoded_input, pad_mask, dst, dst_mask)
+        return output
+
+

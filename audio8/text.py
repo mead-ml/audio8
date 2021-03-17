@@ -6,11 +6,14 @@ import torch
 from eight_mile.pytorch.layers import (
     EmbeddingsStack,
     TransformerEncoderStack,
+    TransformerDecoderStack,
     SingleHeadReduction,
     TwoHeadConcat,
-    sequence_mask_mxlen,
     MeanPool1D,
     MaxPool1D,
+    WeightTieDense,
+    subsequent_mask,
+    sequence_mask_mxlen,
 )
 import torch.nn as nn
 import contextlib
@@ -164,3 +167,43 @@ class TextTransformerPooledEncoder(nn.Module):
         else:
             encoded_reduced = self.reduction_layer((encoded, encoded, encoded, att_mask.unsqueeze(1).unsqueeze(1)))
         return encoded_reduced
+
+
+class TextTransformerDecoder(torch.nn.Module):
+    def __init__(self, tgt_embeddings, dropout=0.1, num_layers=2, hsz=768, num_heads=4, scale=True, layer_drop=0.0, activation='gelu', **kwargs):
+        super().__init__()
+        self.tgt_embeddings = tgt_embeddings
+        dsz = self.tgt_embeddings.get_dsz()
+        if hsz is None:
+            hsz = dsz
+
+        d_ff = int(kwargs.get('d_ff', 4 * hsz))
+
+        self.transformer = TransformerDecoderStack(
+            num_heads,
+            d_model=hsz,
+            d_ff=d_ff,
+            pdrop=dropout,
+            scale=scale,
+            layers=num_layers,
+            layer_drop=layer_drop,
+            activation_type=activation,
+        )
+
+        self.preds = WeightTieDense(self.tgt_embeddings)
+
+    def forward(self, encoder_output, src_mask, dst, dst_mask):
+        embed_out_bth = self.tgt_embeddings(dst)
+        context_bth = encoder_output
+        T = embed_out_bth.shape[1]
+        dst_attn_mask = subsequent_mask(T)
+        dst_attn_mask = (dst_attn_mask & dst_mask.unsqueeze(1).unsqueeze(1).type_as(dst_attn_mask)).type_as(embed_out_bth)
+        src_mask = src_mask.unsqueeze(1).unsqueeze(1)
+        output = self.transformer((embed_out_bth, context_bth, src_mask, dst_attn_mask))
+        prob = self.output(output)
+        return prob
+
+    def output(self, x):
+        pred = torch.log_softmax(self.preds(x.view(x.size(0) * x.size(1), -1)), dim=-1)
+        pred = pred.view(x.size(0), x.size(1), -1)
+        return pred
