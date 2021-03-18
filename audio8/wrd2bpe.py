@@ -3,6 +3,7 @@ import os
 from argparse import ArgumentParser
 from audio8.text import BPEVectorizer
 from eight_mile.utils import revlut
+
 parser = ArgumentParser()
 parser.add_argument("--root_dir")
 parser.add_argument("--train_dataset", type=str, help='Dataset (by name), e.g. train-clean-360')

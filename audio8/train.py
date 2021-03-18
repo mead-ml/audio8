@@ -49,7 +49,9 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
             for logits, input_lengths in zip(logits_batch, input_lengths_batch):
                 input_lengths = input_lengths.item()
                 probs = logits.exp().cpu().numpy()
-                transcription = prefix_beam_search(probs[:input_lengths, :], index2vocab, beam=1, decoder_eow=decoder_eow)[0]
+                transcription = prefix_beam_search(
+                    probs[:input_lengths, :], index2vocab, beam=1, decoder_eow=decoder_eow
+                )[0]
                 print(transcription)
     return loss, metrics
 
@@ -98,7 +100,9 @@ def train():
     )
     parser.add_argument("--channel_mask_len", type=int, default=64, help="Num consecutive channels to mask")
     parser.add_argument("--train_steps", type=int, default=320_000, help="Num training steps")
-    parser.add_argument("--valid_steps", type=int, default=1000, help="Maximum number of valid steps to evaluate each time")
+    parser.add_argument(
+        "--valid_steps", type=int, default=1000, help="Maximum number of valid steps to evaluate each time"
+    )
     parser.add_argument("--steps_per_checkpoint", type=int, default=2400, help="The number of steps per checkpoint")
     parser.add_argument("--verbose", type=str2bool, help="Verbose", default=False)
     parser.add_argument(
@@ -185,8 +189,14 @@ def train():
 
     validate_on = min(args.train_steps // 2, args.steps_per_checkpoint)
     report_on = max(10, args.steps_per_checkpoint) // 10
-    lr_sched = create_lrs(args.lr, args.train_steps, args.lr_scheduler, alpha=args.lr_alpha, warmup_steps=args.warmup_steps, plateau_steps=args.plateau_steps)
-
+    lr_sched = create_lrs(
+        args.lr,
+        args.train_steps,
+        args.lr_scheduler,
+        alpha=args.lr_alpha,
+        warmup_steps=args.warmup_steps,
+        plateau_steps=args.plateau_steps,
+    )
 
     global_step = 0
     if args.restart_from:
@@ -269,7 +279,9 @@ def train():
         # This loader will iterate for ever
         batch = next(train_itr)
 
-        loss, step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose, use_bpe=use_bpe)
+        loss, step_metrics = run_step(
+            index2vocab, model, batch, loss_function, args.device, args.verbose, use_bpe=use_bpe
+        )
         batch_sizes.update(step_metrics['batch_size'])
         iters += 1
 
@@ -294,7 +306,11 @@ def train():
                     batch_sizes.avg,
                 )
 
-            if (optimizer.global_step + 1) % validate_on == 0 and optimizer.global_step != last_validation_step and args.local_rank < 1:
+            if (
+                (optimizer.global_step + 1) % validate_on == 0
+                and optimizer.global_step != last_validation_step
+                and args.local_rank < 1
+            ):
                 last_validation_step = optimizer.global_step
                 train_token_loss = avg_loss.avg
                 metrics['average_train_loss'] = train_token_loss

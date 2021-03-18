@@ -202,8 +202,14 @@ def train():
     update_on = args.steps_per_checkpoint
     validate_on = min(args.train_steps // 2, update_on * 10)
     report_on = max(10, update_on) // 10
-    lr_sched = create_lrs(args.lr, args.train_steps, args.lr_scheduler,
-                          alpha=args.lr_alpha, warmup_steps=args.warmup_steps, plateau_steps=args.plateau_steps)
+    lr_sched = create_lrs(
+        args.lr,
+        args.train_steps,
+        args.lr_scheduler,
+        alpha=args.lr_alpha,
+        warmup_steps=args.warmup_steps,
+        plateau_steps=args.plateau_steps,
+    )
 
     global_step = 0
     if args.restart_from:

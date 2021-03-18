@@ -50,6 +50,7 @@ class TextVectorizer:
     def emit_end_tok(self):
         return []
 
+
 class BPEVectorizer:
     def __init__(self, model_file, vocab_file, emit_begin_tok=[], emit_end_tok=[]):
         self.internal = BPEVectorizer1D(
@@ -57,7 +58,7 @@ class BPEVectorizer:
             vocab_file=vocab_file,
             emit_begin_tok=emit_begin_tok,
             emit_end_tok=emit_end_tok,
-            #transform_fn=str.lower,
+            # transform_fn=str.lower,
         )
 
     @property
@@ -170,7 +171,18 @@ class TextTransformerPooledEncoder(nn.Module):
 
 
 class TextTransformerDecoder(torch.nn.Module):
-    def __init__(self, tgt_embeddings, dropout=0.1, num_layers=2, hsz=768, num_heads=4, scale=True, layer_drop=0.0, activation='gelu', **kwargs):
+    def __init__(
+        self,
+        tgt_embeddings,
+        dropout=0.1,
+        num_layers=2,
+        hsz=768,
+        num_heads=4,
+        scale=True,
+        layer_drop=0.0,
+        activation='gelu',
+        **kwargs,
+    ):
         super().__init__()
         self.tgt_embeddings = tgt_embeddings
         dsz = self.tgt_embeddings.get_dsz()
@@ -197,7 +209,9 @@ class TextTransformerDecoder(torch.nn.Module):
         context_bth = encoder_output
         T = embed_out_bth.shape[1]
         dst_attn_mask = subsequent_mask(T)
-        dst_attn_mask = (dst_attn_mask & dst_mask.unsqueeze(1).unsqueeze(1).type_as(dst_attn_mask)).type_as(embed_out_bth)
+        dst_attn_mask = (dst_attn_mask & dst_mask.unsqueeze(1).unsqueeze(1).type_as(dst_attn_mask)).type_as(
+            embed_out_bth
+        )
         src_mask = src_mask.unsqueeze(1).unsqueeze(1)
         output = self.transformer((embed_out_bth, context_bth, src_mask, dst_attn_mask))
         prob = self.output(output)

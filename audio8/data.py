@@ -184,14 +184,16 @@ class AudioTextLetterDataset(IterableDataset):
                     # If the data is already BPE, we dont want to re-tokenize it, we just have to convert it to ints
                     # the assumption here is that if its BPE, the start and token are not part of the chunks
                     else:
-                        go = [self.vec.vocab[t] for t in self.vec.internal.emit_begin_tok] if self.vec.emit_begin_tok else []
-                        end = [self.vec.vocab[t] for t in self.vec.internal.emit_end_tok] if self.vec.emit_end_tok else []
-
-                        tokens = (
-                            go
-                            + [self.get_or_unk_warn(t) for t in text]
-                            + end
+                        go = (
+                            [self.vec.vocab[t] for t in self.vec.internal.emit_begin_tok]
+                            if self.vec.emit_begin_tok
+                            else []
                         )
+                        end = (
+                            [self.vec.vocab[t] for t in self.vec.internal.emit_end_tok] if self.vec.emit_end_tok else []
+                        )
+
+                        tokens = go + [self.get_or_unk_warn(t) for t in text] + end
                         tokens = np.array(tokens, dtype=np.int)
                     self.files.append(path)
                     self.sizes.append(x_length)
@@ -257,8 +259,6 @@ class AudioTextLetterDataset(IterableDataset):
                     'files'
                 ]
 
-
-
     def read_batch(self, batch):
         zp_text = np.ones((len(batch), self.max_dst_length), dtype=np.long)
         audios = []
@@ -282,7 +282,7 @@ class AudioTextLetterDataset(IterableDataset):
         mx_src_seen = audio_lengths.max()
         zp_audio = np.zeros((len(batch), mx_src_seen), dtype=np.float32)
         for i, audio in enumerate(audios):
-            zp_audio[i, :len(audio)] = audio
+            zp_audio[i, : len(audio)] = audio
         mx_dst_seen = min(text_lengths.max(), self.max_dst_length)
         return {
             'signal': zp_audio[:, :mx_src_seen],

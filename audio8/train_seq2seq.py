@@ -12,12 +12,19 @@ from audio8.wav2vec2 import Seq2Seq, load_fairseq_bin, Wav2Vec2Encoder, CONV_FEA
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, Offsets, revlut
-from eight_mile.pytorch.layers import save_checkpoint, init_distributed, sequence_mask, find_latest_checkpoint, SequenceLoss
+from eight_mile.pytorch.layers import (
+    save_checkpoint,
+    init_distributed,
+    sequence_mask,
+    find_latest_checkpoint,
+    SequenceLoss,
+)
 from eight_mile.pytorch.optz import OptimizerManager
 from audio8.ctc import ctc_metrics, prefix_beam_search, postproc_bpe, postproc_letters
 from audio8.utils import create_lrs
 import baseline.embeddings
 import baseline.pytorch.embeddings
+
 logger = logging.getLogger(__file__)
 Offsets.GO = 0
 Offsets.PAD = 1
@@ -65,28 +72,29 @@ def create_seq2seq_model(
         freeze_fx=freeze_fx,
     )
     preproc_data = baseline.embeddings.load_embeddings(
-        'x',
-        dsz=d_model,
-        known_vocab=vocab,
-        preserve_vocab_indices=True,
-        embed_type='learned-positional',
+        'x', dsz=d_model, known_vocab=vocab, preserve_vocab_indices=True, embed_type='learned-positional',
     )
     tgt_embeddings = preproc_data['embeddings']
-    decoder = TextTransformerDecoder(tgt_embeddings, dropout=decoder_dropout, num_layers=decoder_layers, hsz=d_model, num_heads=decoder_heads, scale=True,
-                                     layer_drop=decoder_layer_drop)
+    decoder = TextTransformerDecoder(
+        tgt_embeddings,
+        dropout=decoder_dropout,
+        num_layers=decoder_layers,
+        hsz=d_model,
+        num_heads=decoder_heads,
+        scale=True,
+        layer_drop=decoder_layer_drop,
+    )
     return Seq2Seq(encoder, decoder)
 
 
-def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True, use_bpe=False):
-    decoder_eow = '|' if not use_bpe else ' '
-    postproc_fn = postproc_letters if not use_bpe else postproc_bpe
-
+def run_step(model, batch, loss_function, device):
     inputs, input_lengths, targets, target_lengths, _ = batch
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
     targets = targets.to(device)
-    text_inputs = torch.cat([torch.full((targets.shape[0], 1), Offsets.GO, dtype=torch.long).to(targets.device),
-                             targets], 1)
+    text_inputs = torch.cat(
+        [torch.full((targets.shape[0], 1), Offsets.GO, dtype=torch.long).to(targets.device), targets], 1
+    )
 
     dst = text_inputs[:, :-1]
     targets = text_inputs[:, 1:].contiguous()
@@ -145,7 +153,9 @@ def train():
     )
     parser.add_argument("--channel_mask_len", type=int, default=64, help="Num consecutive channels to mask")
     parser.add_argument("--train_steps", type=int, default=320_000, help="Num training steps")
-    parser.add_argument("--valid_steps", type=int, default=1000, help="Maximum number of valid steps to evaluate each time")
+    parser.add_argument(
+        "--valid_steps", type=int, default=1000, help="Maximum number of valid steps to evaluate each time"
+    )
     parser.add_argument("--steps_per_checkpoint", type=int, default=2400, help="The number of steps per checkpoint")
     parser.add_argument("--verbose", type=str2bool, help="Verbose", default=False)
     parser.add_argument(
@@ -192,7 +202,6 @@ def train():
     vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, args.dict_file)
     vocab = read_vocab_file(vocab_file)
     vec = TextVectorizer(vocab)
-    index2vocab = revlut(vocab)
     train_dataset = os.path.join(args.root_dir, args.train_dataset)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
@@ -219,20 +228,25 @@ def train():
         is_infinite=False,
         tgt_type=args.target_type,
     )
-    train_loader = DataLoader(train_set, batch_size=None)  # , num_workers=args.num_train_workers)
+    train_loader = DataLoader(train_set, batch_size=None, num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
 
     logger.info("Loaded datasets")
 
-    model = create_seq2seq_model(vocab, args.target_sample_rate//1000, **vars(args)).to(args.device)
-    use_bpe = True if args.target_type == 'bpe' else False
+    model = create_seq2seq_model(vocab, args.target_sample_rate // 1000, **vars(args)).to(args.device)
     loss_function = SequenceLoss().to(args.device)
     logger.info("Loaded model and loss")
 
     validate_on = min(args.train_steps // 2, args.steps_per_checkpoint)
     report_on = max(10, args.steps_per_checkpoint) // 10
-    lr_sched = create_lrs(args.lr, args.train_steps, args.lr_scheduler, alpha=args.lr_alpha, warmup_steps=args.warmup_steps, plateau_steps=args.plateau_steps)
-
+    lr_sched = create_lrs(
+        args.lr,
+        args.train_steps,
+        args.lr_scheduler,
+        alpha=args.lr_alpha,
+        warmup_steps=args.warmup_steps,
+        plateau_steps=args.plateau_steps,
+    )
 
     global_step = 0
     if args.restart_from:
@@ -315,7 +329,8 @@ def train():
         # This loader will iterate for ever
         batch = next(train_itr)
 
-        loss, step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose, use_bpe=use_bpe)
+        loss, step_metrics = run_step(model, batch, loss_function, args.device)
+
         batch_sizes.update(step_metrics['batch_size'])
         iters += 1
 
@@ -340,7 +355,11 @@ def train():
                     batch_sizes.avg,
                 )
 
-            if (optimizer.global_step + 1) % validate_on == 0 and optimizer.global_step != last_validation_step and args.local_rank < 1:
+            if (
+                (optimizer.global_step + 1) % validate_on == 0
+                and optimizer.global_step != last_validation_step
+                and args.local_rank < 1
+            ):
                 last_validation_step = optimizer.global_step
                 train_token_loss = avg_loss.avg
                 metrics['average_train_loss'] = train_token_loss
@@ -361,16 +380,7 @@ def train():
 
                     try:
                         with torch.no_grad():
-                            loss, valid_step_metrics = run_step(
-                                index2vocab,
-                                model,
-                                batch,
-                                loss_function,
-                                args.device,
-                                verbose=args.verbose,
-                                training=False,
-                                use_bpe=use_bpe,
-                            )
+                            loss, valid_step_metrics = run_step(model, batch, loss_function, args.device,)
                         c_errors += valid_step_metrics['c_errors']
                         w_errors += valid_step_metrics['w_errors']
                         c_total += valid_step_metrics['c_total']

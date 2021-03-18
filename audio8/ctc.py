@@ -132,6 +132,7 @@ def postproc_letters(sentence):
     sentence = sentence.replace(" ", "").replace("|", " ").strip()
     return sentence
 
+
 def postproc_bpe(sentence):
     sentence = ' '.join(sentence)
     sentence = sentence.replace("@@ ", "").strip()

@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import math
+from eight_mile.utils import Offsets
 from eight_mile.pytorch.serialize import load_tlm_npz
 from eight_mile.pytorch.layers import (
     pytorch_conv1d,
@@ -663,7 +664,9 @@ class Wav2Vec2Encoder(nn.Module):
 
         self.feature_extractor = ConvFeatureExtractionModel(conv_features)
         self.proj_to_input = Dense(fx_dsz, d_model)
-        self.encoder = AudioTransformerEncoder(num_heads, d_model, dropout, num_layers, d_ff=d_ff, layer_drop=layer_drop)
+        self.encoder = AudioTransformerEncoder(
+            num_heads, d_model, dropout, num_layers, d_ff=d_ff, layer_drop=layer_drop
+        )
         self.mask_emb = nn.Parameter(torch.FloatTensor(d_model).uniform_())
         self.timestep_masking = timestep_masking
         self.channel_masking = channel_masking
@@ -868,7 +871,9 @@ class Wav2Vec2Model(nn.Module):
         self.quantizer = GumbelVectorQuantizer(
             fx_dsz, num_vq_vars, start_temp, end_temp, temp_decay_factor, num_vq_groups, final_dim
         )
-        self.encoder = AudioTransformerEncoder(num_heads, d_model, dropout, num_layers, d_ff=d_ff, layer_drop=layer_drop)
+        self.encoder = AudioTransformerEncoder(
+            num_heads, d_model, dropout, num_layers, d_ff=d_ff, layer_drop=layer_drop
+        )
         self.project_q = Dense(final_dim, final_dim)
         self.final_proj = Dense(d_model, final_dim)
         self.timestep_masking = timestep_masking
@@ -944,4 +949,19 @@ class Seq2Seq(nn.Module):
         output = self.decoder(encoded_input, pad_mask, dst, dst_mask)
         return output
 
+    def decode(self, input, pad_mask, max_output_len=100):
+        with torch.no_grad():
+            encoded_input, pad_mask = self.encoder(input, pad_mask)
 
+            dst = torch.full((input.shape[0], 1), Offsets.GO, dtype=torch.long).to(input.device)
+            dst_mask = torch.ones_like(dst).bool()
+            for i in range(max_output_len):
+
+                outputs = self.decoder(encoded_input, pad_mask, dst, dst_mask)
+                best = torch.argmax(outputs[:, i], -1)
+                end_mask = (best != Offsets.EOS).unsqueeze(1)
+                if all(~end_mask):
+                    break
+                dst_mask = torch.cat([dst_mask, end_mask], 1)
+                dst = torch.cat([dst, best.unsqueeze(1)], 1)
+            return dst[:, 1:]
