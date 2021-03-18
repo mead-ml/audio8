@@ -7,15 +7,23 @@ import torch
 import os
 from argparse import ArgumentParser
 from audio8.data import AudioTextLetterDataset
-from audio8.text import TextVectorizer, read_vocab_file
-from audio8.wav2vec2 import create_acoustic_model, load_fairseq_bin
+from audio8.text import TextVectorizer, read_vocab_file, TextTransformerDecoder
+from audio8.wav2vec2 import Seq2Seq, load_fairseq_bin, Wav2Vec2Encoder, CONV_FEATURES
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, Offsets, revlut
-from eight_mile.pytorch.layers import save_checkpoint, init_distributed, sequence_mask, find_latest_checkpoint
+from eight_mile.pytorch.layers import (
+    save_checkpoint,
+    init_distributed,
+    sequence_mask,
+    find_latest_checkpoint,
+    SequenceLoss,
+)
 from eight_mile.pytorch.optz import OptimizerManager
-from audio8.ctc import CTCLoss, ctc_metrics, prefix_beam_search, postproc_bpe, postproc_letters
+from audio8.ctc import ctc_metrics, prefix_beam_search, postproc_bpe, postproc_letters
 from audio8.utils import create_lrs
+import baseline.embeddings
+import baseline.pytorch.embeddings
 
 logger = logging.getLogger(__file__)
 Offsets.GO = 0
@@ -26,33 +34,74 @@ Offsets.VALUES[Offsets.EOS] = '</s>'
 Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 
-def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True, use_bpe=False):
-    decoder_eow = '|' if not use_bpe else ' '
-    postproc_fn = postproc_letters if not use_bpe else postproc_bpe
+def create_seq2seq_model(
+    vocab,
+    sample_rate=16,
+    d_model=768,
+    num_heads=12,
+    num_layers=12,
+    dropout=0.1,
+    d_ff=None,
+    dropout_input=0.0,
+    timestep_masking=0.5,
+    channel_masking=0.1,
+    timestep_mask_len=10,
+    channel_mask_len=64,
+    layer_drop=0.0,
+    freeze_fx=True,
+    decoder_dropout=0.1,
+    decoder_layers=2,
+    decoder_heads=4,
+    decoder_layer_drop=0.0,
+    **kwargs,
+):
+    encoder = Wav2Vec2Encoder(
+        CONV_FEATURES[sample_rate],
+        d_model,
+        num_heads,
+        num_layers,
+        dropout,
+        d_ff,
+        dropout_input,
+        0.0,
+        timestep_masking,
+        channel_masking,
+        timestep_mask_len,
+        channel_mask_len,
+        layer_drop,
+        freeze_fx=freeze_fx,
+    )
+    preproc_data = baseline.embeddings.load_embeddings(
+        'x', dsz=d_model, known_vocab=vocab, preserve_vocab_indices=True, embed_type='learned-positional',
+    )
+    tgt_embeddings = preproc_data['embeddings']
+    decoder = TextTransformerDecoder(
+        tgt_embeddings,
+        dropout=decoder_dropout,
+        num_layers=decoder_layers,
+        hsz=d_model,
+        num_heads=decoder_heads,
+        scale=True,
+        layer_drop=decoder_layer_drop,
+    )
+    return Seq2Seq(encoder, decoder)
 
+
+def run_step(model, batch, loss_function, device):
     inputs, input_lengths, targets, target_lengths, _ = batch
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
     targets = targets.to(device)
-    logits, pad_mask = model(inputs, pad_mask)
-    output_lengths = pad_mask.sum(-1)
-    loss = loss_function(logits.transpose(1, 0), output_lengths, targets, target_lengths)
-    logits = logits.detach().cpu()
+    text_inputs = torch.cat(
+        [torch.full((targets.shape[0], 1), Offsets.GO, dtype=torch.long).to(targets.device), targets], 1
+    )
+
+    dst = text_inputs[:, :-1]
+    targets = text_inputs[:, 1:].contiguous()
+    logits = model(inputs, pad_mask, dst, target_lengths)
+    loss = loss_function(logits, targets)
     metrics = {}
     metrics['batch_size'] = inputs.shape[0]
-    if not training:
-
-        metrics = ctc_metrics(logits, targets, input_lengths, index2vocab, postproc_fn=postproc_fn)
-        if verbose:
-            input_lengths_batch = pad_mask.sum(-1)
-            logits_batch = logits
-            for logits, input_lengths in zip(logits_batch, input_lengths_batch):
-                input_lengths = input_lengths.item()
-                probs = logits.exp().cpu().numpy()
-                transcription = prefix_beam_search(
-                    probs[:input_lengths, :], index2vocab, beam=1, decoder_eow=decoder_eow
-                )[0]
-                print(transcription)
     return loss, metrics
 
 
@@ -76,6 +125,10 @@ def train():
     parser.add_argument("--num_train_workers", type=int, default=4, help="Number train workers")
     parser.add_argument("--max_sample_len", type=int, help="Max sample length")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
+    parser.add_argument("--decoder_dropout", type=float, default=0.1, help="Dropout on decoder")
+    parser.add_argument("--decoder_layers", type=float, default=2, help="Number of layers for decoder")
+    parser.add_argument("--decoder_heads", type=float, default=4, help="Number of heads for decoder")
+
     parser.add_argument("--layer_drop", type=float, default=0.0, help="Layer Dropout")
     parser.add_argument("--lr_scheduler", type=str, default='cosine', help="The type of learning rate decay scheduler")
     parser.add_argument("--lr_alpha", type=float, default=0.0, help="parameter alpha for cosine decay scheduler")
@@ -149,7 +202,6 @@ def train():
     vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, args.dict_file)
     vocab = read_vocab_file(vocab_file)
     vec = TextVectorizer(vocab)
-    index2vocab = revlut(vocab)
     train_dataset = os.path.join(args.root_dir, args.train_dataset)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
@@ -181,10 +233,8 @@ def train():
 
     logger.info("Loaded datasets")
 
-    num_labels = len(vocab)
-    model = create_acoustic_model(num_labels, args.target_sample_rate // 1000, **vars(args)).to(args.device)
-    use_bpe = True if args.target_type == 'bpe' else False
-    loss_function = CTCLoss(reduction_type=args.loss_reduction_type).to(args.device)
+    model = create_seq2seq_model(vocab, args.target_sample_rate // 1000, **vars(args)).to(args.device)
+    loss_function = SequenceLoss().to(args.device)
     logger.info("Loaded model and loss")
 
     validate_on = min(args.train_steps // 2, args.steps_per_checkpoint)
@@ -279,9 +329,8 @@ def train():
         # This loader will iterate for ever
         batch = next(train_itr)
 
-        loss, step_metrics = run_step(
-            index2vocab, model, batch, loss_function, args.device, args.verbose, use_bpe=use_bpe
-        )
+        loss, step_metrics = run_step(model, batch, loss_function, args.device)
+
         batch_sizes.update(step_metrics['batch_size'])
         iters += 1
 
@@ -331,16 +380,7 @@ def train():
 
                     try:
                         with torch.no_grad():
-                            loss, valid_step_metrics = run_step(
-                                index2vocab,
-                                model,
-                                batch,
-                                loss_function,
-                                args.device,
-                                verbose=args.verbose,
-                                training=False,
-                                use_bpe=use_bpe,
-                            )
+                            loss, valid_step_metrics = run_step(model, batch, loss_function, args.device,)
                         c_errors += valid_step_metrics['c_errors']
                         w_errors += valid_step_metrics['w_errors']
                         c_total += valid_step_metrics['c_total']
