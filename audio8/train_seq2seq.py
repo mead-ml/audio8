@@ -116,7 +116,7 @@ def train():
     parser.add_argument("--dict_file", type=str, help="Dictionary file", default='dict.{}.txt')
     parser.add_argument("--dataset_key", default="LibriSpeech", help="dataset key for basedir")
     parser.add_argument("--grad_accum", type=int, default=2)
-    parser.add_argument("--loss_reduction_type", type=str, default="sum", choices=["sum", "mean"])
+    parser.add_argument("--loss_reduction_type", type=str, default="sum", choices=["sum", "token"])
     parser.add_argument("--d_model", type=int, default=768, help="Model dimension (and embedding dsz)")
     parser.add_argument("--d_ff", type=int, default=3072, help="FFN dimension")
     parser.add_argument("--d_k", type=int, default=None, help="Dimension per head.  Use if num_heads=1 to reduce dims")
@@ -234,7 +234,7 @@ def train():
     logger.info("Loaded datasets")
 
     model = create_seq2seq_model(vocab, args.target_sample_rate // 1000, **vars(args)).to(args.device)
-    loss_function = SequenceLoss().to(args.device)
+    loss_function = SequenceLoss(avg=args.loss_reduction_type).to(args.device)
     logger.info("Loaded model and loss")
 
     validate_on = min(args.train_steps // 2, args.steps_per_checkpoint)
@@ -368,10 +368,6 @@ def train():
                 model.eval()
                 valid_start = time.time()
                 valid_itr = iter(valid_loader)
-                c_errors = 0
-                c_total = 0
-                w_errors = 0
-                w_total = 0
 
                 valid_metrics = {}
                 for j, batch in enumerate(valid_itr):
@@ -381,17 +377,12 @@ def train():
                     try:
                         with torch.no_grad():
                             loss, valid_step_metrics = run_step(model, batch, loss_function, args.device,)
-                        c_errors += valid_step_metrics['c_errors']
-                        w_errors += valid_step_metrics['w_errors']
-                        c_total += valid_step_metrics['c_total']
-                        w_total += valid_step_metrics['w_total']
+
                         avg_valid_loss.update(loss.item())
                         elapsed = time.time() - valid_start
                         valid_token_loss = avg_valid_loss.avg
                         valid_metrics['average_valid_loss'] = valid_token_loss
                         valid_metrics['valid_elapsed_epoch'] = elapsed
-                        valid_metrics['cer'] = (c_errors / c_total) * 100
-                        valid_metrics['wer'] = (w_errors / w_total) * 100
 
                     except Exception as e:
                         logger.error(e)
