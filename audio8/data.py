@@ -157,7 +157,6 @@ class AudioTextLetterDataset(IterableDataset):
         return transcription.split()
 
     def get_or_unk_warn(self, t):
-        t = t.lower()
         if t not in self.vec.vocab:
             logger.debug('Word %s not in vocab', t)
             return Offsets.UNK
