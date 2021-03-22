@@ -269,13 +269,14 @@ def train():
     iters = 0
     last_validation_step = -1
     last_report_step = -1
+    start = time.time()
+
     optimizer.zero_grad()
     while optimizer.global_step < args.train_steps:
 
         if optimizer.global_step > args.unfreeze_enc_after_step:
             _model.freeze = False
         metrics = {}
-        start = time.time()
         # This loader will iterate for ever
         batch = next(train_itr)
 
@@ -294,17 +295,19 @@ def train():
                 optimizer.zero_grad()
             elapsed = time.time() - start
             step_time.update(elapsed)
+            start = time.time()
 
             if (optimizer.global_step + 1) % report_on == 0 and optimizer.global_step != last_report_step:
                 last_report_step = optimizer.global_step
-                steps_per_sec = 1.0 / step_time.avg
-                logging.info(
-                    '%s, steps/min %f, LR %.6f, avg batch size %.2f',
-                    avg_loss,
-                    steps_per_sec * 60,
-                    optimizer.current_lr,
-                    batch_sizes.avg,
-                )
+                if step_time.avg != 0:
+                    steps_per_sec = 1.0 / step_time.avg
+                    logging.info(
+                        '%s, steps/min %f, LR %.6f, avg batch size %.2f',
+                        avg_loss,
+                        steps_per_sec * 60,
+                        optimizer.current_lr,
+                        batch_sizes.avg,
+                    )
 
             if (
                 (optimizer.global_step + 1) % validate_on == 0
