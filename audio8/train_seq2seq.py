@@ -149,8 +149,11 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
     metrics = {}
     metrics['batch_size'] = inputs.shape[0]
     if not training:
-
-        decoded = model.decode(inputs, pad_mask, torch.max(target_lengths))
+        if hasattr(model, 'module'):
+            m = model.module
+        else:
+            m = model
+        decoded = m.decode(inputs, pad_mask, torch.max(target_lengths))
         metrics = decode_metrics(decoded, targets, input_lengths, index2vocab, postproc_fn=postproc_fn)
         if verbose:
             for sentence in decoded:
