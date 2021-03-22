@@ -87,7 +87,53 @@ def create_seq2seq_model(
     return Seq2Seq(encoder, decoder)
 
 
-def run_step(model, batch, loss_function, device):
+def decode_metrics(decoded, target, input_lengths, index2vocab, postproc_fn=postproc_letters):
+    metrics = {}
+    import editdistance
+
+    BLANK_IDX = Offsets.GO
+    with torch.no_grad():
+
+        c_err = 0
+        c_len = 0
+        w_errs = 0
+        w_len = 0
+        wv_errs = 0
+        for dp, t, inp_l in zip(decoded, target, input_lengths,):
+            dp = dp[:inp_l].unsqueeze(0)
+            p = (t != Offsets.PAD) & (t != Offsets.EOS)
+            targ = t[p]
+            targ_units = [index2vocab[x.item()] for x in targ]
+            targ_units_arr = targ.tolist()
+
+            toks = dp.unique_consecutive()
+            pred_units_arr = toks[toks != BLANK_IDX].tolist()
+
+            c_err += editdistance.eval(pred_units_arr, targ_units_arr)
+            c_len += len(targ_units_arr)
+
+            targ_words = postproc_fn(targ_units).split()
+
+            pred_units = [index2vocab[x] for x in pred_units_arr]
+            pred_words_raw = postproc_fn(pred_units).split()
+
+            dist = editdistance.eval(pred_words_raw, targ_words)
+            w_errs += dist
+            wv_errs += dist
+
+            w_len += len(targ_words)
+
+        metrics["wv_errors"] = wv_errs
+        metrics["w_errors"] = w_errs
+        metrics["w_total"] = w_len
+        metrics["c_errors"] = c_err
+        metrics["c_total"] = c_len
+    return metrics
+
+
+def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True, use_bpe=False):
+    postproc_fn = postproc_letters if not use_bpe else postproc_bpe
+
     inputs, input_lengths, targets, target_lengths, _ = batch
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
@@ -102,6 +148,14 @@ def run_step(model, batch, loss_function, device):
     loss = loss_function(logits, targets)
     metrics = {}
     metrics['batch_size'] = inputs.shape[0]
+    if not training:
+
+        decoded = model.decode(inputs, pad_mask, torch.max(target_lengths))
+        metrics = decode_metrics(decoded, targets, input_lengths, index2vocab, postproc_fn=postproc_fn)
+        if verbose:
+            for sentence in decoded:
+                print(postproc_fn(index2vocab[tok.item()] for tok in sentence))
+
     return loss, metrics
 
 
@@ -202,6 +256,8 @@ def train():
     vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, args.dict_file)
     vocab = read_vocab_file(vocab_file)
     vec = TextVectorizer(vocab)
+    index2vocab = revlut(vocab)
+
     train_dataset = os.path.join(args.root_dir, args.train_dataset)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
@@ -234,6 +290,8 @@ def train():
     logger.info("Loaded datasets")
 
     model = create_seq2seq_model(vocab, args.target_sample_rate // 1000, **vars(args)).to(args.device)
+    use_bpe = True if args.target_type == 'bpe' else False
+
     loss_function = SequenceLoss(avg=args.loss_reduction_type).to(args.device)
     logger.info("Loaded model and loss")
 
@@ -329,7 +387,7 @@ def train():
         # This loader will iterate for ever
         batch = next(train_itr)
 
-        loss, step_metrics = run_step(model, batch, loss_function, args.device)
+        loss, step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose, use_bpe=use_bpe)
 
         batch_sizes.update(step_metrics['batch_size'])
         iters += 1
@@ -368,7 +426,10 @@ def train():
                 model.eval()
                 valid_start = time.time()
                 valid_itr = iter(valid_loader)
-
+                c_errors = 0
+                c_total = 0
+                w_errors = 0
+                w_total = 0
                 valid_metrics = {}
                 for j, batch in enumerate(valid_itr):
                     if j > args.valid_steps:
@@ -376,13 +437,18 @@ def train():
 
                     try:
                         with torch.no_grad():
-                            loss, valid_step_metrics = run_step(model, batch, loss_function, args.device,)
-
+                            loss, valid_step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose, training=False, use_bpe=use_bpe)
+                        c_errors += valid_step_metrics['c_errors']
+                        w_errors += valid_step_metrics['w_errors']
+                        c_total += valid_step_metrics['c_total']
+                        w_total += valid_step_metrics['w_total']
                         avg_valid_loss.update(loss.item())
                         elapsed = time.time() - valid_start
                         valid_token_loss = avg_valid_loss.avg
                         valid_metrics['average_valid_loss'] = valid_token_loss
                         valid_metrics['valid_elapsed_epoch'] = elapsed
+                        valid_metrics['cer'] = (c_errors / c_total) * 100
+                        valid_metrics['wer'] = (w_errors / w_total) * 100
 
                     except Exception as e:
                         logger.error(e)
