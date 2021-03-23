@@ -28,6 +28,7 @@ Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True, use_bpe=False):
     decoder_eow = '|' if not use_bpe else ' '
+    delim = '' if not use_bpe else ' '
     postproc_fn = postproc_letters if not use_bpe else postproc_bpe
 
     inputs, input_lengths, targets, target_lengths, _ = batch
@@ -50,7 +51,7 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
                 input_lengths = input_lengths.item()
                 probs = logits.exp().cpu().numpy()
                 transcription = prefix_beam_search(
-                    probs[:input_lengths, :], index2vocab, beam=1, decoder_eow=decoder_eow
+                    probs[:input_lengths, :], index2vocab, beam=1, decoder_eow=decoder_eow, delim=delim,
                 )[0]
                 print(transcription)
     return loss, metrics

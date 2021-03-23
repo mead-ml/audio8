@@ -41,6 +41,7 @@ def prefix_beam_search(
     alpha: float = 0.3,
     beta: float = 5.0,
     return_scores: bool = False,
+    delim: str = '',
 ):
     """Use a prefix beam search (https://arxiv.org/pdf/1408.2873.pdf) to decode
 
@@ -98,7 +99,7 @@ def prefix_beam_search(
 
                 else:
                     v = v.replace(decoder_eos, eos).replace(decoder_eow, eow)
-                    hyp_next = hyp + v
+                    hyp_next = hyp + delim + v
 
                     if len(hyp) > 0 and v == hyp[-1]:
                         p_non_blank[t][hyp_next] += p_at_t[c] * p_blank[t - 1][hyp]
