@@ -184,12 +184,12 @@ class AudioTextLetterDataset(IterableDataset):
                     # the assumption here is that if its BPE, the start and token are not part of the chunks
                     else:
                         go = (
-                            [self.vec.vocab[t] for t in self.vec.internal.emit_begin_tok]
+                            [self.vec.vocab[t] for t in self.vec.emit_begin_tok]
                             if self.vec.emit_begin_tok
                             else []
                         )
                         end = (
-                            [self.vec.vocab[t] for t in self.vec.internal.emit_end_tok] if self.vec.emit_end_tok else []
+                            [self.vec.vocab[t] for t in self.vec.emit_end_tok] if self.vec.emit_end_tok else []
                         )
 
                         tokens = go + [self.get_or_unk_warn(t) for t in text] + end

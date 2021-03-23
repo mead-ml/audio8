@@ -137,13 +137,11 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
     inputs, input_lengths, targets, target_lengths, _ = batch
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
+    target_lengths = target_lengths - 1
     targets = targets.to(device)
-    text_inputs = torch.cat(
-        [torch.full((targets.shape[0], 1), Offsets.GO, dtype=torch.long).to(targets.device), targets], 1
-    )
 
-    dst = text_inputs[:, :-1]
-    targets = text_inputs[:, 1:].contiguous()
+    dst = targets[:, :-1].contiguous()
+    targets = targets[:, 1:].contiguous()
     logits = model(inputs, pad_mask, dst, target_lengths)
     loss = loss_function(logits, targets)
     metrics = {}
@@ -156,9 +154,9 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
         decoded = m.decode(inputs, pad_mask, torch.max(target_lengths))
         metrics = decode_metrics(decoded, targets, input_lengths, index2vocab, postproc_fn=postproc_fn)
         if verbose:
-            for sentence in decoded:
-                print(postproc_fn(index2vocab[tok.item()] for tok in sentence))
-
+            for sentence, gold in zip(decoded, targets):
+                print('Pred: ', postproc_fn(index2vocab[tok.item()] for tok in sentence))
+                print('Gold: ', postproc_fn(index2vocab[tok.item()] for tok in gold if tok.item() > 2))
     return loss, metrics
 
 
@@ -258,7 +256,7 @@ def train():
 
     vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, args.dict_file)
     vocab = read_vocab_file(vocab_file)
-    vec = TextVectorizer(vocab)
+    vec = TextVectorizer(vocab, ["<s>"], ["</s>"])
     index2vocab = revlut(vocab)
 
     train_dataset = os.path.join(args.root_dir, args.train_dataset)

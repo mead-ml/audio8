@@ -31,8 +31,10 @@ def read_vocab_file(vocab_file: str):
 
 
 class TextVectorizer:
-    def __init__(self, vocab: Dict[str, int]):
+    def __init__(self, vocab: Dict[str, int], emit_begin_tok=[], emit_end_tok=[]):
         self.vocab = vocab
+        self._emit_begin_tok = emit_begin_tok
+        self._emit_end_tok = emit_end_tok
 
     def run(self, text) -> np.ndarray:
         """
@@ -44,11 +46,11 @@ class TextVectorizer:
 
     @property
     def emit_begin_tok(self):
-        return []
+        return self._emit_begin_tok
 
     @property
     def emit_end_tok(self):
-        return []
+        return self._emit_end_tok
 
 
 class BPEVectorizer:
