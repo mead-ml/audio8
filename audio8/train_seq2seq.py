@@ -138,10 +138,9 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
     target_lengths = target_lengths - 1
-    targets = targets.to(device)
+    dst = targets[:, :-1].contiguous().to(device)
+    targets = targets[:, 1:].contiguous().to(device)
 
-    dst = targets[:, :-1].contiguous()
-    targets = targets[:, 1:].contiguous()
     logits = model(inputs, pad_mask, dst, target_lengths)
     loss = loss_function(logits, targets)
     metrics = {}
