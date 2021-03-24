@@ -6,6 +6,8 @@
 import numpy as np
 import os
 import torch.nn as nn
+import importlib
+import glob
 import random
 import soundfile as sf
 from torch.utils.data import DataLoader, IterableDataset
@@ -471,3 +473,106 @@ class BucketingAudioDataset(AudioFileDataset):
                 bucket = keys[bucket_idx]
                 for (file, _) in self.files[bucket]:
                     yield self.process_sample(file, bucket)
+
+
+class PreprocessedAudioTextDataset(IterableDataset):
+
+    TGT_LETTER = 'ltr'
+    TGT_BPE = 'bpe'
+    TGT_WRD = 'wrd'
+
+    def __init__(
+        self,
+        data_dir,
+        distribute=True,
+        shuffle=True,
+        tgt_type=TGT_LETTER,
+        is_infinite=True,
+        **kwargs
+    ):
+        super().__init__()
+        self.tfrecord = importlib.import_module('tfrecord')
+        self.tgt_type = tgt_type
+        self.rank = 0
+        self.world_size = 1
+        self.files = [f for f in glob.glob(os.path.join(data_dir, f"*.tfrecord"))]
+        self.shuffle = shuffle
+        self.distribute = distribute
+        if torch.distributed.is_initialized() and distribute:
+            self.rank = torch.distributed.get_rank()
+            self.world_size = torch.distributed.get_world_size()
+
+        self.is_infinite = is_infinite
+
+    def _get_worker_info(self):
+        return torch.utils.data.get_worker_info() if self.distribute else None
+
+    def _init_read_order(self):
+        # Each node has the same worker_info, so the unique offsets for each is
+        # rank * num_workers + worker_id
+        # and the total available workers is world_size * num_workers
+        worker_info = self._get_worker_info()
+
+        if worker_info is None:
+            num_workers_per_node = 1
+            node_worker_id = 0
+        else:
+            num_workers_per_node = worker_info.num_workers
+            node_worker_id = worker_info.id
+        all_workers = self.world_size * num_workers_per_node
+        offset = self.rank * num_workers_per_node + node_worker_id
+        read_file_order = list(range(offset, len(self.files), all_workers))
+        if not read_file_order:
+            if offset > 0:
+                # This is probably wrong
+                logger.warning(
+                    f"There are no files to read for worker {node_worker_id}, offset {offset}!"
+                    + " This might mean that you are passing an incorrect training or validation directory"
+                )
+            else:
+                # This is definitely wrong
+                raise Exception(f"No files of pattern {self.pattern} were found in {self.directory}!")
+        return read_file_order, node_worker_id
+
+    def _convert_batch(self, batch):
+        batch_size = int(batch['batch_size'])
+        signal = batch['signal']
+        signal = signal.reshape((batch_size, -1))
+        token_ids = batch['token_ids'].reshape((batch_size, -1))
+        return signal, batch['signal_lengths'], token_ids, batch['token_lengths'], None
+
+    def __iter__(self):
+        read_order, node_worker_id = self._init_read_order()
+        if self.is_infinite:
+            while True:
+                if self.shuffle:
+                    random.shuffle(read_order)
+                for rd in read_order:
+                    file = self.files[rd]
+                    idx_file = '.'.join(file.split('.')[:-1]) + '.index'
+                    # shard = (worker_id, num_workers), but we already assigned this file to one certain worker,
+                    # so shard = (0, 1)
+                    itr = self.tfrecord.reader.tfrecord_loader(file, idx_file, shard=(0, 1))
+                    if self.shuffle:
+                        np.random.seed(node_worker_id)
+                        # not sure about the optimal choice of shuffle_queue_size here:
+                        itr = self.tfrecord.iterator_utils.shuffle_iterator(itr, queue_size=128)
+                    for batch in itr:
+                        yield self._convert_batch(batch)
+
+        else:
+            if self.shuffle:
+                random.shuffle(read_order)
+            for rd in read_order:
+                file = self.files[rd]
+                idx_file = '.'.join(file.split('.')[:-1]) + '.index'
+                # shard = (worker_id, num_workers), but we already assigned this file to one certain worker,
+                # so shard = (0, 1)
+                itr = self.tfrecord.reader.tfrecord_loader(file, idx_file, shard=(0, 1))
+                if self.shuffle:
+                    np.random.seed(node_worker_id)
+                    # not sure about the optimal choice of shuffle_queue_size here:
+                    itr = self.tfrecord.iterator_utils.shuffle_iterator(itr, queue_size=128)
+                for batch in itr:
+                    yield self._convert_batch(batch)
+

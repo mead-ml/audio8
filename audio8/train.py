@@ -6,7 +6,7 @@ import time
 import torch
 import os
 from argparse import ArgumentParser
-from audio8.data import AudioTextLetterDataset
+from audio8.data import AudioTextLetterDataset, PreprocessedAudioTextDataset
 from audio8.text import TextVectorizer, read_vocab_file
 from audio8.wav2vec2 import create_acoustic_model, load_fairseq_bin
 from torch.nn.parallel import DistributedDataParallel
@@ -154,29 +154,35 @@ def train():
     train_dataset = os.path.join(args.root_dir, args.train_dataset)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
 
-    train_set = AudioTextLetterDataset(
-        train_dataset,
-        vec,
-        args.target_tokens_per_batch,
-        args.max_sample_len,
-        input_sample_rate=args.input_sample_rate,
-        target_sample_rate=args.target_sample_rate,
-        shuffle=True,
-        distribute=args.distributed,
-        tgt_type=args.target_type,
-    )
-    valid_set = AudioTextLetterDataset(
-        valid_dataset,
-        vec,
-        args.target_tokens_per_batch,
-        args.max_sample_len,
-        input_sample_rate=args.input_sample_rate,
-        target_sample_rate=args.target_sample_rate,
-        distribute=False,
-        shuffle=False,
-        is_infinite=False,
-        tgt_type=args.target_type,
-    )
+    if os.path.isdir(train_dataset):
+        train_set = PreprocessedAudioTextDataset(valid_dataset)
+    else:
+        train_set = AudioTextLetterDataset(
+            train_dataset,
+            vec,
+            args.target_tokens_per_batch,
+            args.max_sample_len,
+            input_sample_rate=args.input_sample_rate,
+            target_sample_rate=args.target_sample_rate,
+            shuffle=True,
+            distribute=args.distributed,
+            tgt_type=args.target_type,
+        )
+    if os.path.isdir(valid_dataset):
+        valid_set = PreprocessedAudioTextDataset(valid_dataset)
+    else:
+        valid_set = AudioTextLetterDataset(
+            valid_dataset,
+            vec,
+            args.target_tokens_per_batch,
+            args.max_sample_len,
+            input_sample_rate=args.input_sample_rate,
+            target_sample_rate=args.target_sample_rate,
+            distribute=False,
+            shuffle=False,
+            is_infinite=False,
+            tgt_type=args.target_type,
+        )
     train_loader = DataLoader(train_set, batch_size=None, num_workers=args.num_train_workers)
     valid_loader = DataLoader(valid_set, batch_size=None)
 
@@ -294,9 +300,9 @@ def train():
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
                 optimizer.step()
                 optimizer.zero_grad()
-            elapsed = time.time() - start
-            step_time.update(elapsed)
-            start = time.time()
+                elapsed = time.time() - start
+                step_time.update(elapsed)
+                start = time.time()
 
             if (optimizer.global_step + 1) % report_on == 0 and optimizer.global_step != last_report_step:
                 last_report_step = optimizer.global_step
