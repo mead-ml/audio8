@@ -294,9 +294,9 @@ def train():
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
                 optimizer.step()
                 optimizer.zero_grad()
-            elapsed = time.time() - start
-            step_time.update(elapsed)
-            start = time.time()
+                elapsed = time.time() - start
+                step_time.update(elapsed)
+                start = time.time()
 
             if (optimizer.global_step + 1) % report_on == 0 and optimizer.global_step != last_report_step:
                 last_report_step = optimizer.global_step
