@@ -38,12 +38,15 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
     logits, pad_mask = model(inputs, pad_mask)
     output_lengths = pad_mask.sum(-1)
     loss = loss_function(logits.transpose(1, 0), output_lengths, targets, target_lengths)
+    num_tokens = target_lengths.sum().item()
+
     logits = logits.detach().cpu()
     metrics = {}
     metrics['batch_size'] = inputs.shape[0]
+    metrics['num_tokens'] = num_tokens
     if not training:
 
-        metrics = ctc_metrics(logits, targets, input_lengths, index2vocab, postproc_fn=postproc_fn)
+        metrics.update(ctc_metrics(logits, targets, input_lengths, index2vocab, postproc_fn=postproc_fn))
         if verbose:
             input_lengths_batch = pad_mask.sum(-1)
             logits_batch = logits
@@ -177,8 +180,8 @@ def train():
         is_infinite=False,
         tgt_type=args.target_type,
     )
-    train_loader = DataLoader(train_set, batch_size=None, num_workers=args.num_train_workers)
-    valid_loader = DataLoader(valid_set, batch_size=None)
+    train_loader = DataLoader(train_set, batch_size=None, num_workers=args.num_train_workers, pin_memory=True)
+    valid_loader = DataLoader(valid_set, batch_size=None, pin_memory=True)
 
     logger.info("Loaded datasets")
 
@@ -263,16 +266,22 @@ def train():
     train_itr = iter(train_loader)
     avg_loss = Average('average_train_loss')
     step_time = Average('average_step_time')
-    batch_sizes = Average('batch_size')
+    batch_size_sent = Average('batch_size')
+    batch_size_toks = Average('batch_toks')
+
+
     model.train()
     # All of our early stopping metrics currently need to be lower to be better, so set to high number initially
     best_metric = 1e8
+    eff_batch_size = 0
+    num_tokens_this_batch = 0
     iters = 0
     last_validation_step = -1
     last_report_step = -1
     start = time.time()
 
     optimizer.zero_grad()
+
     while optimizer.global_step < args.train_steps:
 
         if optimizer.global_step > args.unfreeze_enc_after_step:
@@ -284,16 +293,28 @@ def train():
         loss, step_metrics = run_step(
             index2vocab, model, batch, loss_function, args.device, args.verbose, use_bpe=use_bpe
         )
-        batch_sizes.update(step_metrics['batch_size'])
+        num_tokens_this_batch += step_metrics['num_tokens']
+        eff_batch_size += step_metrics['batch_size']
         iters += 1
 
         try:
             avg_loss.update(loss.item())
             loss.backward()
             if iters % args.grad_accum == 0:
+                # The effective batch size is iter_size * num_gpus * grad_accum
+                # When we DDP though, it does an average reduce, so we dont want any normalization
+                # going in, and because we only call step every grad_accum times our true average is
+                # scaled by grad_accum already.  If we scale up by the world_size then we get the unnormalized grads
+                # then we need to divide by all the tokens we saw in this batch to normalize it
+                optimizer.scale_grads(num_gpus / num_tokens_this_batch)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+                # DDP does a mean reduction so scale by world size
                 optimizer.step()
                 optimizer.zero_grad()
+                batch_size_sent.update(eff_batch_size)
+                batch_size_toks.update(num_tokens_this_batch)
+                num_tokens_this_batch = 0
+                eff_batch_size = 0
                 elapsed = time.time() - start
                 step_time.update(elapsed)
                 start = time.time()
@@ -303,11 +324,12 @@ def train():
                 if step_time.avg != 0:
                     steps_per_sec = 1.0 / step_time.avg
                     logging.info(
-                        '%s, steps/min %f, LR %.6f, avg batch size %.2f',
+                        '%s, steps/min %f, LR %.6f, batch (sents %.2f, toks %.2f)',
                         avg_loss,
                         steps_per_sec * 60,
                         optimizer.current_lr,
-                        batch_sizes.avg,
+                        batch_size_sent.avg,
+                        batch_size_toks.avg,
                     )
 
             if (
