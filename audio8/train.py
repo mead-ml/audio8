@@ -118,7 +118,6 @@ def train():
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
     parser.add_argument("--target_type", type=str, choices=["wrd", "ltr", "bpe"], default="ltr")
     parser.add_argument("--freeze_fx", type=str2bool, help="Freeze feature extractor", default=True)
-
     parser.add_argument(
         "--local_rank",
         type=int,
@@ -305,8 +304,8 @@ def train():
                 # When we DDP though, it does an average reduce, so we dont want any normalization
                 # going in, and because we only call step every grad_accum times our true average is
                 # scaled by grad_accum already.  If we scale up by the world_size then we get the unnormalized grads
-                # then we need to divide by all the tokens we saw in this batch to normalize it
-                optimizer.scale_grads(num_gpus / num_tokens_this_batch)
+                # then we need to divide by the effective batch size
+                optimizer.scale_grads(num_gpus / eff_batch_size)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
                 # DDP does a mean reduction so scale by world size
                 optimizer.step()

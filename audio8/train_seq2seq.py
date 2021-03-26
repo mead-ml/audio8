@@ -411,8 +411,8 @@ def train():
                 # When we DDP though, it does an average reduce, so we dont want any normalization
                 # going in, and because we only call step every grad_accum times our true average is
                 # scaled by grad_accum already.  If we scale up by the world_size then we get the unnormalized grads
-                # then we need to divide by all the tokens we saw in this batch to normalize it
-                optimizer.scale_grads(num_gpus / num_tokens_this_batch)
+                # then we need to divide by the effective batch size
+                optimizer.scale_grads(num_gpus / eff_batch_size)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
                 # DDP does a mean reduction so scale by world size
                 optimizer.step()
