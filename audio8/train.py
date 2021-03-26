@@ -180,8 +180,8 @@ def train():
         is_infinite=False,
         tgt_type=args.target_type,
     )
-    train_loader = DataLoader(train_set, batch_size=None, num_workers=args.num_train_workers)
-    valid_loader = DataLoader(valid_set, batch_size=None)
+    train_loader = DataLoader(train_set, batch_size=None, num_workers=args.num_train_workers, pin_memory=True)
+    valid_loader = DataLoader(valid_set, batch_size=None, pin_memory=True)
 
     logger.info("Loaded datasets")
 
@@ -268,17 +268,20 @@ def train():
     step_time = Average('average_step_time')
     batch_size_sent = Average('batch_size')
     batch_size_toks = Average('batch_toks')
+
+
     model.train()
     # All of our early stopping metrics currently need to be lower to be better, so set to high number initially
     best_metric = 1e8
+    eff_batch_size = 0
+    num_tokens_this_batch = 0
     iters = 0
     last_validation_step = -1
     last_report_step = -1
     start = time.time()
 
     optimizer.zero_grad()
-    eff_batch_size = 0
-    num_tokens_this_batch = 0
+
     while optimizer.global_step < args.train_steps:
 
         if optimizer.global_step > args.unfreeze_enc_after_step:
