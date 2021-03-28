@@ -5,6 +5,7 @@ import logging
 import time
 import torch
 import os
+import contextlib
 from argparse import ArgumentParser
 from audio8.data import AudioTextLetterDataset
 from audio8.text import TextVectorizer, read_vocab_file, TextTransformerDecoder
@@ -380,7 +381,7 @@ def train():
     model.train()
     # All of our early stopping metrics currently need to be lower to be better, so set to high number initially
     best_metric = 1e8
-    eff_batch_size = 0
+    batch_size = 0
     num_tokens_this_batch = 0
     iters = 0
     last_validation_step = -1
@@ -400,31 +401,30 @@ def train():
         loss, step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose, use_bpe=use_bpe)
 
         num_tokens_this_batch += step_metrics['num_tokens']
-        eff_batch_size += step_metrics['batch_size']
+        batch_size += step_metrics['batch_size']
         iters += 1
 
         try:
             avg_loss.update(loss.item())
-            loss.backward()
+
             if iters % args.grad_accum == 0:
-                # The effective batch size is iter_size * num_gpus * grad_accum
-                # When we DDP though, it does an average reduce, so we dont want any normalization
-                # going in, and because we only call step every grad_accum times our true average is
-                # scaled by grad_accum already.  If we scale up by the world_size then we get the unnormalized grads
-                # then we need to divide by the effective batch size
-                optimizer.scale_grads(num_gpus / eff_batch_size)
+                # This will allreduce the gradients which will be scaled by 1/num_gpus
+                loss.backward()
+                optimizer.scale_grads(num_gpus / batch_size)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
                 # DDP does a mean reduction so scale by world size
                 optimizer.step()
                 optimizer.zero_grad()
-                batch_size_sent.update(eff_batch_size)
+                batch_size_sent.update(batch_size)
                 batch_size_toks.update(num_tokens_this_batch)
                 num_tokens_this_batch = 0
-                eff_batch_size = 0
+                batch_size = 0
                 elapsed = time.time() - start
                 step_time.update(elapsed)
                 start = time.time()
-
+            else:
+                with model.no_sync() if args.distributed else contextlib.ExitStack():
+                    loss.backward()
             if (optimizer.global_step + 1) % report_on == 0 and optimizer.global_step != last_report_step:
                 last_report_step = optimizer.global_step
                 if step_time.avg != 0:
