@@ -381,8 +381,8 @@ def train():
     model.train()
     # All of our early stopping metrics currently need to be lower to be better, so set to high number initially
     best_metric = 1e8
-    batch_size = torch.tensor(0)
-    num_tokens_this_batch = torch.tensor(0)
+    batch_size = torch.tensor(0, device=args.device, dtype=int)
+    num_tokens_this_batch = torch.tensor(0, device=args.device, dtype=int)
     iters = 0
     last_validation_step = -1
     last_report_step = -1
@@ -411,6 +411,7 @@ def train():
                 # This will allreduce the gradients which will be scaled by 1/num_gpus
                 loss.backward()
                 if args.distributed:
+
                     torch.distributed.all_reduce(batch_size)
                     torch.distributed.all_reduce(num_tokens_this_batch)
                 optimizer.scale_grads(num_gpus / batch_size.item())
@@ -418,8 +419,8 @@ def train():
                 # DDP does a mean reduction so scale by world size
                 optimizer.step()
                 optimizer.zero_grad()
-                batch_size_sent.update(batch_size.item())
-                batch_size_toks.update(num_tokens_this_batch.item())
+                batch_size_sent.update(batch_size.cpu().item())
+                batch_size_toks.update(num_tokens_this_batch.cpu().item())
                 num_tokens_this_batch *= 0
                 batch_size *= 0
                 elapsed = time.time() - start
