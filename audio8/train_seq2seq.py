@@ -434,12 +434,13 @@ def train():
                 if step_time.avg != 0:
                     steps_per_sec = 1.0 / step_time.avg
                     logging.info(
-                        '%s, steps/min %f, LR %.6f, batch (sents %.2f, toks %.2f)',
+                        '%s, steps/min %f, LR %.6f, batch (samples %.2f, toks %.2f, toks/min %.2f)',
                         avg_loss,
                         steps_per_sec * 60,
                         optimizer.current_lr,
                         batch_size_sent.avg,
                         batch_size_toks.avg,
+                        batch_size_toks.avg * steps_per_sec * 60,
                     )
 
             if (
