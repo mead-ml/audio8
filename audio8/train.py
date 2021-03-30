@@ -36,6 +36,7 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
     inputs = inputs.to(device)
     targets = targets.to(device)
+
     logits, pad_mask = model(inputs, pad_mask)
     output_lengths = pad_mask.sum(-1)
     loss = loss_function(logits.transpose(1, 0), output_lengths, targets, target_lengths)
@@ -283,57 +284,57 @@ def train():
 
     while optimizer.global_step < args.train_steps:
 
-        if optimizer.global_step > args.unfreeze_enc_after_step:
-            _model.freeze = False
-        metrics = {}
-        # This loader will iterate for ever
-        batch = next(train_itr)
-
-        loss, step_metrics = run_step(
-            index2vocab, model, batch, loss_function, args.device, args.verbose, use_bpe=use_bpe
-        )
-        num_tokens_this_batch += step_metrics['num_tokens']
-        batch_size += step_metrics['batch_size']
-        iters += 1
-
         try:
-            avg_loss.update(loss.item())
 
-            if iters % args.grad_accum == 0:
-                # This will allreduce the gradients which will be scaled by 1/num_gpus
+            if optimizer.global_step > args.unfreeze_enc_after_step:
+                _model.freeze = False
+            metrics = {}
+            iters += 1
+            is_dist_step = iters % args.grad_accum == 0
+            with model.no_sync() if (args.distributed and not is_dist_step) else contextlib.ExitStack():
+                # This loader will iterate for ever
+                batch = next(train_itr)
+
+                loss, step_metrics = run_step(
+                    index2vocab, model, batch, loss_function, args.device, args.verbose, use_bpe=use_bpe
+                )
+                num_tokens_this_batch += step_metrics['num_tokens']
+                batch_size += step_metrics['batch_size']
+
+                avg_loss.update(loss.item())
                 loss.backward()
-                if args.distributed:
-                    torch.distributed.all_reduce(batch_size)
-                    torch.distributed.all_reduce(num_tokens_this_batch)
-                optimizer.scale_grads(num_gpus / batch_size)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-                # DDP does a mean reduction so scale by world size
-                optimizer.step()
-                optimizer.zero_grad()
-                batch_size_sent.update(batch_size.cpu().item())
-                batch_size_toks.update(num_tokens_this_batch.cpu().item())
-                num_tokens_this_batch *= 0
-                batch_size *= 0
-                elapsed = time.time() - start
-                step_time.update(elapsed)
-                start = time.time()
-            else:
-                with model.no_sync() if args.distributed else contextlib.ExitStack():
-                    loss.backward()
+                if is_dist_step: 
+                    # This will allreduce the gradients which will be scaled by 1/num_gpus
+                    #with CudaTimer('backward'):
+                    if args.distributed:
+                        torch.distributed.all_reduce(batch_size)
+                        torch.distributed.all_reduce(num_tokens_this_batch)
 
-            if (optimizer.global_step + 1) % report_on == 0 and optimizer.global_step != last_report_step:
-                last_report_step = optimizer.global_step
-                if step_time.avg != 0:
-                    steps_per_sec = 1.0 / step_time.avg
-                    logging.info(
-                        '%s, steps/min %f, LR %.6f, batch (samples %.2f, toks %.2f, toks/min %.2f)',
-                        avg_loss,
-                        steps_per_sec * 60,
-                        optimizer.current_lr,
-                        batch_size_sent.avg,
-                        batch_size_toks.avg,
-                        batch_size_toks.avg * steps_per_sec * 60,
-                    )
+                    optimizer.scale_grads(num_gpus / batch_size)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    batch_size_sent.update(batch_size.cpu().item())
+                    batch_size_toks.update(num_tokens_this_batch.cpu().item())
+                    num_tokens_this_batch *= 0
+                    batch_size *= 0
+                    elapsed = time.time() - start
+                    step_time.update(elapsed)
+                    start = time.time()
+
+                if (optimizer.global_step + 1) % report_on == 0 and optimizer.global_step != last_report_step:
+                    last_report_step = optimizer.global_step
+                    if step_time.avg != 0:
+                        steps_per_sec = 1.0 / step_time.avg
+                        logging.info(
+                            '%s, steps/min %f, LR %.6f, batch (samples %.2f, toks %.2f, toks/min %.2f)',
+                            avg_loss,
+                            steps_per_sec * 60,
+                            optimizer.current_lr,
+                            batch_size_sent.avg,
+                            batch_size_toks.avg,
+                            batch_size_toks.avg * steps_per_sec * 60,
+                        )
 
             if (
                 (optimizer.global_step + 1) % validate_on == 0
