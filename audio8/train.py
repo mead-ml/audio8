@@ -28,9 +28,6 @@ Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 
 def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True, use_bpe=False):
-    decoder_eow = '|' if not use_bpe else ' '
-    delim = '' if not use_bpe else ' '
-    postproc_fn = postproc_letters if not use_bpe else postproc_bpe
 
     inputs, input_lengths, targets, target_lengths, _ = batch
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
@@ -45,6 +42,9 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
     metrics['batch_size'] = inputs.shape[0]
     metrics['num_tokens'] = num_tokens
     if not training:
+        decoder_eow = '|' if not use_bpe else ' '
+        delim = '' if not use_bpe else ' '
+        postproc_fn = postproc_letters if not use_bpe else postproc_bpe
         logits = logits.detach().cpu()
         metrics.update(ctc_metrics(logits, targets, input_lengths, index2vocab, postproc_fn=postproc_fn))
         if verbose:
@@ -268,7 +268,6 @@ def train():
     batch_size_sent = Average('batch_size')
     batch_size_toks = Average('batch_toks')
 
-
     model.train()
     # All of our early stopping metrics currently need to be lower to be better, so set to high number initially
     best_metric = 1e8
@@ -305,7 +304,6 @@ def train():
                 loss.backward()
                 if is_dist_step: 
                     # This will allreduce the gradients which will be scaled by 1/num_gpus
-                    #with CudaTimer('backward'):
                     if args.distributed:
                         torch.distributed.all_reduce(batch_size)
                         torch.distributed.all_reduce(num_tokens_this_batch)
