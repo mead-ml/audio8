@@ -40,13 +40,11 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
     output_lengths = pad_mask.sum(-1)
     loss = loss_function(logits.transpose(1, 0), output_lengths, targets, target_lengths)
     num_tokens = target_lengths.sum().item()
-
-    logits = logits.detach().cpu()
     metrics = {}
     metrics['batch_size'] = inputs.shape[0]
     metrics['num_tokens'] = num_tokens
     if not training:
-
+        logits = logits.detach().cpu()
         metrics.update(ctc_metrics(logits, targets, input_lengths, index2vocab, postproc_fn=postproc_fn))
         if verbose:
             input_lengths_batch = pad_mask.sum(-1)
