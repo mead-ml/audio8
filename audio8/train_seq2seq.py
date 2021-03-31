@@ -397,6 +397,7 @@ def train():
 
             if optimizer.global_step > args.unfreeze_enc_after_step:
                 _model.freeze = False
+            metrics = {}
             iters += 1
             is_dist_step = iters % args.grad_accum == 0
             with model.no_sync() if (args.distributed and not is_dist_step) else contextlib.ExitStack():        # This loader will iterate for ever
