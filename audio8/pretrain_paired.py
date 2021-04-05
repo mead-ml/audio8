@@ -40,7 +40,11 @@ def run_step(batch, loss_function, device):
     inputs = inputs.to(device)
     targets = targets.to(device)
     loss = loss_function((inputs, pad_mask), (targets, target_lengths))
-    return loss
+    num_tokens = target_lengths.sum().item()
+    metrics = {}
+    metrics['batch_size'] = inputs.shape[0]
+    metrics['num_tokens'] = num_tokens
+    return loss, metrics
 
 
 def train():
@@ -272,71 +276,102 @@ def train():
     train_itr = iter(train_loader)
     avg_loss = Average('average_train_loss')
     step_time = Average('average_step_time')
+    batch_size_sent = Average('batch_size')
+    batch_size_toks = Average('batch_toks')
+    batch_size = torch.tensor(0, device=args.device, dtype=int)
+    num_tokens_this_batch = torch.tensor(0, device=args.device, dtype=int)
+
     model.train()
+    iters = 0
+    start = time.time()
 
-    for i in range(steps, args.train_steps):
+    optimizer.zero_grad()
 
-        if steps > args.audio_unfreeze_after_step:
+    while optimizer.global_step < args.train_steps:
+
+        if optimizer.global_step > args.audio_unfreeze_after_step:
             _model.encoder_1.freeze = False
 
-        if steps > args.text_unfreeze_after_step:
+        if optimizer.global_step > args.text_unfreeze_after_step:
             _model.encoder_2.freeze = False
         metrics = {}
-        optimizer.zero_grad()
-        start = time.time()
-        # This loader will iterate for ever
-        batch = next(train_itr)
-
-        loss = run_step(batch, loss_function, args.device)
-        steps += 1
+        iters += 1
+        is_dist_step = iters % args.grad_accum == 0
 
         try:
-            avg_loss.update(loss.item())
-            loss.backward()
-            if steps % args.grad_accum == 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-                optimizer.step()
-                optimizer.zero_grad()
-            elapsed = time.time() - start
-            step_time.update(elapsed)
+            with model.no_sync() if (args.distributed and not is_dist_step) else contextlib.ExitStack():
+                # This loader will iterate for ever
+                batch = next(train_itr)
+                loss, step_metrics = run_step(batch, loss_function, args.device)
+                num_tokens_this_batch += step_metrics['num_tokens']
+                batch_size += step_metrics['batch_size']
 
-            if (steps + 1) % report_on == 0:
-                steps_per_sec = 1.0 / step_time.avg
-                logging.info('%s, steps/min %f, LR %.6f', avg_loss, steps_per_sec * 60, optimizer.current_lr)
+                avg_loss.update(loss.item())
+                loss.backward()
 
-            if (steps + 1) % update_on == 0 and args.local_rank < 1:
-                save_checkpoint(model, model_base, steps, tick_type='step')
-            if (steps + 1) % validate_on == 0 and args.local_rank < 1:
-                train_token_loss = avg_loss.avg
-                metrics['average_train_loss'] = train_token_loss
-                avg_valid_loss = Average('average_valid_loss')
+                if is_dist_step:
+                    # This will allreduce the gradients which will be scaled by 1/num_gpus
+                    if args.distributed:
+                        torch.distributed.all_reduce(batch_size)
+                        torch.distributed.all_reduce(num_tokens_this_batch)
 
-                model.eval()
-                valid_start = time.time()
-                valid_itr = iter(valid_loader)
+                    optimizer.scale_grads(num_gpus / batch_size)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    batch_size_sent.update(batch_size.cpu().item())
+                    batch_size_toks.update(num_tokens_this_batch.cpu().item())
+                    num_tokens_this_batch *= 0
+                    batch_size *= 0
+                    elapsed = time.time() - start
+                    step_time.update(elapsed)
+                    start = time.time()
+                    if optimizer.global_step % report_on == 0:
+                        if step_time.avg != 0:
+                            steps_per_sec = 1.0 / step_time.avg
+                            logging.info(
+                                '%s, steps/min %f, LR %.6f, batch (samples %.2f, toks %.2f, toks/min %.2f)',
+                                avg_loss,
+                                steps_per_sec * 60,
+                                optimizer.current_lr,
+                                batch_size_sent.avg,
+                                batch_size_toks.avg,
+                                batch_size_toks.avg * steps_per_sec * 60,
+                            )
 
-                valid_metrics = {}
-                for j, batch in enumerate(valid_itr):
-                    if j > args.valid_steps:
-                        break
+                    if optimizer.global_step % update_on == 0 and args.local_rank < 1:
+                        save_checkpoint(model, model_base, steps, tick_type='step')
+                    if optimizer.global_step % validate_on == 0 and args.local_rank < 1:
+                        train_token_loss = avg_loss.avg
+                        metrics['average_train_loss'] = train_token_loss
+                        avg_valid_loss = Average('average_valid_loss')
 
-                    try:
-                        with torch.no_grad():
-                            loss = run_step(batch, loss_function, args.device)
+                        model.eval()
+                        valid_start = time.time()
+                        valid_itr = iter(valid_loader)
 
-                        avg_valid_loss.update(loss.item())
-                        elapsed = time.time() - valid_start
-                        valid_token_loss = avg_valid_loss.avg
-                        valid_metrics['average_valid_loss'] = valid_token_loss
-                        valid_metrics['valid_elapsed_epoch'] = elapsed
+                        valid_metrics = {}
+                        for j, batch in enumerate(valid_itr):
+                            if j > args.valid_steps:
+                                break
 
-                        if j % args.steps_per_update == 0:
-                            logger.info(valid_metrics)
-                    except Exception as e:
-                        logger.error(e)
+                            try:
+                                with torch.no_grad():
+                                    loss, _ = run_step(batch, loss_function, args.device)
 
-                logger.info(metrics)
-                model.train()
+                                avg_valid_loss.update(loss.item())
+                                elapsed = time.time() - valid_start
+                                valid_token_loss = avg_valid_loss.avg
+                                valid_metrics['average_valid_loss'] = valid_token_loss
+                                valid_metrics['valid_elapsed_epoch'] = elapsed
+
+                                if j % args.steps_per_update == 0:
+                                    logger.info(valid_metrics)
+                            except Exception as e:
+                                logger.error(e)
+
+                        logger.info(metrics)
+                        model.train()
         except Exception as e:
             logger.error(e)
 

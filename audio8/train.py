@@ -275,8 +275,6 @@ def train():
     num_tokens_this_batch = torch.tensor(0, device=args.device, dtype=int)
 
     iters = 0
-    last_validation_step = -1
-    last_report_step = -1
     start = time.time()
 
     optimizer.zero_grad()
@@ -320,76 +318,72 @@ def train():
                     step_time.update(elapsed)
                     start = time.time()
 
-                if (optimizer.global_step + 1) % report_on == 0 and optimizer.global_step != last_report_step:
-                    last_report_step = optimizer.global_step
-                    if step_time.avg != 0:
-                        steps_per_sec = 1.0 / step_time.avg
-                        logging.info(
-                            '%s, steps/min %f, LR %.6f, batch (samples %.2f, toks %.2f, toks/min %.2f)',
-                            avg_loss,
-                            steps_per_sec * 60,
-                            optimizer.current_lr,
-                            batch_size_sent.avg,
-                            batch_size_toks.avg,
-                            batch_size_toks.avg * steps_per_sec * 60,
-                        )
-
-            if (
-                (optimizer.global_step + 1) % validate_on == 0
-                and optimizer.global_step != last_validation_step
-                and args.local_rank < 1
-            ):
-                last_validation_step = optimizer.global_step
-                train_token_loss = avg_loss.avg
-                metrics['average_train_loss'] = train_token_loss
-                avg_valid_loss = Average('average_valid_loss')
-
-                model.eval()
-                valid_start = time.time()
-                valid_itr = iter(valid_loader)
-                c_errors = 0
-                c_total = 0
-                w_errors = 0
-                w_total = 0
-
-                valid_metrics = {}
-                for j, batch in enumerate(valid_itr):
-                    if j > args.valid_steps:
-                        break
-
-                    try:
-                        with torch.no_grad():
-                            loss, valid_step_metrics = run_step(
-                                index2vocab,
-                                model,
-                                batch,
-                                loss_function,
-                                args.device,
-                                verbose=args.verbose,
-                                training=False,
-                                use_bpe=use_bpe,
+                    if optimizer.global_step % report_on == 0:
+                        if step_time.avg != 0:
+                            steps_per_sec = 1.0 / step_time.avg
+                            logging.info(
+                                '%s, steps/min %f, LR %.6f, batch (samples %.2f, toks %.2f, toks/min %.2f)',
+                                avg_loss,
+                                steps_per_sec * 60,
+                                optimizer.current_lr,
+                                batch_size_sent.avg,
+                                batch_size_toks.avg,
+                                batch_size_toks.avg * steps_per_sec * 60,
                             )
-                        c_errors += valid_step_metrics['c_errors']
-                        w_errors += valid_step_metrics['w_errors']
-                        c_total += valid_step_metrics['c_total']
-                        w_total += valid_step_metrics['w_total']
-                        avg_valid_loss.update(loss.item())
-                        elapsed = time.time() - valid_start
-                        valid_token_loss = avg_valid_loss.avg
-                        valid_metrics['average_valid_loss'] = valid_token_loss
-                        valid_metrics['valid_elapsed_epoch'] = elapsed
-                        valid_metrics['cer'] = (c_errors / c_total) * 100
-                        valid_metrics['wer'] = (w_errors / w_total) * 100
 
-                    except Exception as e:
-                        logger.error(e)
-                logger.info(metrics)
-                logger.info(valid_metrics)
-                save_checkpoint(model, model_base, optimizer.global_step, tick_type='step')
-                if args.early_stopping_metric and valid_metrics[args.early_stopping_metric] < best_metric:
-                    best_metric = valid_metrics[args.early_stopping_metric]
-                    logger.info("New best metric %.4f", best_metric)
-                    save_checkpoint(model, model_base, 0, tick_type='best')
+                    if (
+                        optimizer.global_step % validate_on == 0 and args.local_rank < 1
+                    ):
+                        train_token_loss = avg_loss.avg
+                        metrics['average_train_loss'] = train_token_loss
+                        avg_valid_loss = Average('average_valid_loss')
+
+                        model.eval()
+                        valid_start = time.time()
+                        valid_itr = iter(valid_loader)
+                        c_errors = 0
+                        c_total = 0
+                        w_errors = 0
+                        w_total = 0
+
+                        valid_metrics = {}
+                        for j, batch in enumerate(valid_itr):
+                            if j > args.valid_steps:
+                                break
+
+                            try:
+                                with torch.no_grad():
+                                    loss, valid_step_metrics = run_step(
+                                        index2vocab,
+                                        model,
+                                        batch,
+                                        loss_function,
+                                        args.device,
+                                        verbose=args.verbose,
+                                        training=False,
+                                        use_bpe=use_bpe,
+                                    )
+                                c_errors += valid_step_metrics['c_errors']
+                                w_errors += valid_step_metrics['w_errors']
+                                c_total += valid_step_metrics['c_total']
+                                w_total += valid_step_metrics['w_total']
+                                avg_valid_loss.update(loss.item())
+                                elapsed = time.time() - valid_start
+                                valid_token_loss = avg_valid_loss.avg
+                                valid_metrics['average_valid_loss'] = valid_token_loss
+                                valid_metrics['valid_elapsed_epoch'] = elapsed
+                                valid_metrics['cer'] = (c_errors / c_total) * 100
+                                valid_metrics['wer'] = (w_errors / w_total) * 100
+
+                            except Exception as e:
+                                logger.error(e)
+                        logger.info(metrics)
+                        logger.info(valid_metrics)
+                        save_checkpoint(model, model_base, optimizer.global_step, tick_type='step')
+                        if args.early_stopping_metric and valid_metrics[args.early_stopping_metric] < best_metric:
+                            best_metric = valid_metrics[args.early_stopping_metric]
+                            logger.info("New best metric %.4f", best_metric)
+                            save_checkpoint(model, model_base, 0, tick_type='best')
                 model.train()
         except Exception as e:
             logger.error(e)
