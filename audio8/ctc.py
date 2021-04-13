@@ -42,6 +42,7 @@ def prefix_beam_search(
     beta: float = 5.0,
     return_scores: bool = False,
     delim: str = '',
+    output_lower: bool = False,
 ):
     """Use a prefix beam search (https://arxiv.org/pdf/1408.2873.pdf) to decode
 
@@ -61,6 +62,8 @@ def prefix_beam_search(
     :param alpha: how much weight to place on the LM
     :param beta: how much weight to place on the length
     :param return_scores: If this is true, return posteriors for N-bests
+    :param delim: The delimiter between tokens, default to ''
+    :param output_lower: Lower case the output, defaults to `False`
     :return:
     """
     p_non_blank = defaultdict(Counter)
@@ -73,6 +76,9 @@ def prefix_beam_search(
     blank_idx = 0
     p_blank[0][''] = 1
     p_non_blank[0][''] = 0
+
+    def transform(s):
+        return s if not output_lower else s.lower()
 
     def score_hyp(s):
         return (p_non_blank[t][s] + p_blank[t][s]) * (length_s(s) ** beta)
@@ -124,8 +130,8 @@ def prefix_beam_search(
         A_prev = A_next[:beam]
 
     if return_scores:
-        return [(hyp.lower(), score_hyp(hyp)) for hyp in A_prev]
-    return [hyp.lower() for hyp in A_prev]
+        return [(transform(hyp), score_hyp(hyp)) for hyp in A_prev]
+    return [transform(hyp) for hyp in A_prev]
 
 
 def postproc_letters(sentence):
@@ -138,6 +144,65 @@ def postproc_bpe(sentence):
     sentence = ' '.join(sentence)
     sentence = sentence.replace("@@ ", "").strip()
     return sentence
+
+
+
+def decode_text_wer(pred_units, t, index2vocab, postproc_fn=postproc_letters):
+    import editdistance
+    with torch.no_grad():
+        w_errs = 0
+        w_len = 0
+        p = (t != Offsets.PAD) & (t != Offsets.EOS)
+        targ = t[p]
+        targ_units = [index2vocab[x.item()] for x in targ]
+        targ_words = postproc_fn(targ_units).split()
+        pred_words_raw = pred_units.split()
+        dist = editdistance.eval(pred_words_raw, targ_words)
+        w_errs += dist
+        w_len += len(targ_words)
+    return w_errs, w_len
+
+def decode_metrics(decoded, target, input_lengths, index2vocab, postproc_fn=postproc_letters):
+    metrics = {}
+    import editdistance
+
+    BLANK_IDX = Offsets.GO
+    with torch.no_grad():
+
+        c_err = 0
+        c_len = 0
+        w_errs = 0
+        w_len = 0
+        wv_errs = 0
+        for dp, t, inp_l in zip(decoded, target, input_lengths,):
+            dp = dp[:inp_l].unsqueeze(0)
+            p = (t != Offsets.PAD) & (t != Offsets.EOS)
+            targ = t[p]
+            targ_units_arr = targ.tolist()
+            toks = dp.unique_consecutive()
+            pred_units_arr = toks[toks != BLANK_IDX].tolist()
+
+            c_err += editdistance.eval(pred_units_arr, targ_units_arr)
+            c_len += len(targ_units_arr)
+
+            targ_units = [index2vocab[x.item()] for x in targ]
+            targ_words = postproc_fn(targ_units).split()
+
+            pred_units = [index2vocab[x] for x in pred_units_arr]
+            pred_words_raw = postproc_fn(pred_units).split()
+
+            dist = editdistance.eval(pred_words_raw, targ_words)
+            w_errs += dist
+            wv_errs += dist
+
+            w_len += len(targ_words)
+
+        metrics["wv_errors"] = wv_errs
+        metrics["w_errors"] = w_errs
+        metrics["w_total"] = w_len
+        metrics["c_errors"] = c_err
+        metrics["c_total"] = c_len
+    return metrics
 
 
 def ctc_metrics(lprobs_t, target, input_lengths, index2vocab, postproc_fn=postproc_letters):
@@ -156,7 +221,6 @@ def ctc_metrics(lprobs_t, target, input_lengths, index2vocab, postproc_fn=postpr
             lp = lp[:inp_l].unsqueeze(0)
             p = (t != Offsets.PAD) & (t != Offsets.EOS)
             targ = t[p]
-            targ_units = [index2vocab[x.item()] for x in targ]
             targ_units_arr = targ.tolist()
 
             toks = lp.argmax(dim=-1).unique_consecutive()
@@ -164,7 +228,7 @@ def ctc_metrics(lprobs_t, target, input_lengths, index2vocab, postproc_fn=postpr
 
             c_err += editdistance.eval(pred_units_arr, targ_units_arr)
             c_len += len(targ_units_arr)
-
+            targ_units = [index2vocab[x.item()] for x in targ]
             targ_words = postproc_fn(targ_units).split()
 
             pred_units = [index2vocab[x] for x in pred_units_arr]

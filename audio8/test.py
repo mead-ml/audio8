@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Offsets, revlut
 from eight_mile.pytorch.layers import sequence_mask, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
-from ctc import ctc_metrics, prefix_beam_search
+from ctc import ctc_metrics, prefix_beam_search, kenlm_model, decode_text_wer
 
 logger = logging.getLogger(__file__)
 
@@ -23,21 +23,25 @@ Offsets.VALUES[Offsets.EOS] = '</s>'
 Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 
-def run_step(index2vocab, model, batch, device, verbose=False):
+def run_step(index2vocab, model, batch, device, verbose=False, lm=None, beam=1):
     with torch.no_grad():
         inputs, input_lengths, targets, target_lengths, _ = batch
         inputs = inputs.to(device)
         pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device)
-        logits, _ = model(inputs, pad_mask)
-        metrics = ctc_metrics(logits, targets, input_lengths, index2vocab)
-        if verbose:
-            input_lengths_batch = pad_mask.sum(-1)
-            logits_batch = logits
-            for logits, input_lengths in zip(logits_batch, input_lengths_batch):
-                input_lengths = input_lengths.item()
-                probs = logits.exp().cpu().numpy()
-                transcription = prefix_beam_search(probs[:input_lengths, :], index2vocab, beam=1)[0]
-                print(transcription)
+        logits_batch, _ = model(inputs, pad_mask)
+        metrics = ctc_metrics(logits_batch, targets, input_lengths, index2vocab)
+        input_lengths_batch = pad_mask.sum(-1)
+        metrics['werr_lm'] = 0
+        metrics['wtotal_lm'] = 0
+
+
+        for logits, input_lengths, target in zip(logits_batch, input_lengths_batch, targets):
+            input_lengths = input_lengths.item()
+            probs = logits.exp().cpu().numpy()
+            transcription = prefix_beam_search(probs[:input_lengths, :], index2vocab, language_model=lm, beam=beam)
+            werr, wtotal = decode_text_wer(transcription, targets, index2vocab)
+            metrics['werr_lm'] += werr
+            metrics['wtotal_lm'] += wtotal
 
     return metrics
 
@@ -72,10 +76,20 @@ def evaluate():
     )
     parser.add_argument("--vocab_file", help="Vocab for output decoding")
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
+    parser.add_argument("--lm")
 
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
+
+    lm = None
+    if args.lm is not None:
+        import kenlm
+
+        logger.info("Found LM file, loading...")
+
+        lm = kenlm.Model(args.lm)
+        lm = kenlm_model(lm)
 
     vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, args.dict_file)
     vocab = read_vocab_file(vocab_file)
@@ -119,7 +133,7 @@ def evaluate():
             break
 
         try:
-            step_metrics = run_step(index2vocab, model, batch, args.device, args.verbose)
+            step_metrics = run_step(index2vocab, model, batch, args.device, args.verbose, lm=lm, beam=3)
             c_errors += step_metrics['c_errors']
             w_errors += step_metrics['w_errors']
 
