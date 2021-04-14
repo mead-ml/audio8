@@ -38,7 +38,7 @@ def prefix_beam_search(
     decoder_eow: str = '|',
     decoder_eos: str = '</s>',
     language_model: Optional[Callable] = None,
-    alpha: float = 0.3,
+    alpha: float = 0.2,
     beta: float = 5.0,
     return_scores: bool = False,
     delim: str = '',
@@ -66,6 +66,7 @@ def prefix_beam_search(
     :param output_lower: Lower case the output, defaults to `False`
     :return:
     """
+
     p_non_blank = defaultdict(Counter)
     p_blank = defaultdict(Counter)
     length_s = lambda l: len(re.findall(r'\w+[\s|\.]', l)) + 1
@@ -76,7 +77,6 @@ def prefix_beam_search(
     blank_idx = 0
     p_blank[0][''] = 1
     p_non_blank[0][''] = 0
-
     def transform(s):
         return s if not output_lower else s.lower()
 
@@ -112,9 +112,9 @@ def prefix_beam_search(
                         p_non_blank[t][hyp] += p_at_t[c] * p_non_blank[t - 1][hyp]
 
                     elif len(hyp.replace(' ', '')) > 0 and v in (eow, eos,):
-                        p_lm = lm_prob(hyp_next.strip())
+                        p_lm = lm_prob(hyp_next.strip()) ** alpha
                         p_non_blank[t][hyp_next] += (
-                            (p_lm ** alpha) * p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
+                            p_lm * p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])
                         )
                     else:
                         p_non_blank[t][hyp_next] += p_at_t[c] * (p_blank[t - 1][hyp] + p_non_blank[t - 1][hyp])

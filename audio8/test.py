@@ -23,7 +23,7 @@ Offsets.VALUES[Offsets.EOS] = '</s>'
 Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 
-def run_step(index2vocab, model, batch, device, verbose=False, lm=None, beam=1):
+def run_step(index2vocab, model, batch, device, verbose=False, lm=None, beam=50, alpha=0.02, beta=5.0):
     with torch.no_grad():
         inputs, input_lengths, targets, target_lengths, _ = batch
         inputs = inputs.to(device)
@@ -31,17 +31,17 @@ def run_step(index2vocab, model, batch, device, verbose=False, lm=None, beam=1):
         logits_batch, _ = model(inputs, pad_mask)
         metrics = ctc_metrics(logits_batch, targets, input_lengths, index2vocab)
         input_lengths_batch = pad_mask.sum(-1)
-        metrics['werr_lm'] = 0
-        metrics['wtotal_lm'] = 0
-
+        metrics['wlm_errors'] = 0
 
         for logits, input_lengths, target in zip(logits_batch, input_lengths_batch, targets):
             input_lengths = input_lengths.item()
             probs = logits.exp().cpu().numpy()
-            transcription = prefix_beam_search(probs[:input_lengths, :], index2vocab, language_model=lm, beam=beam)
-            werr, wtotal = decode_text_wer(transcription, targets, index2vocab)
-            metrics['werr_lm'] += werr
-            metrics['wtotal_lm'] += wtotal
+            transcription = prefix_beam_search(probs[:input_lengths, :], index2vocab, language_model=lm, beam=beam,
+                                               alpha=alpha, beta=beta)[0]
+            if verbose:
+                print(transcription)
+            werr, _ = decode_text_wer(transcription, target, index2vocab)
+            metrics['wlm_errors'] += werr
 
     return metrics
 
@@ -77,7 +77,9 @@ def evaluate():
     parser.add_argument("--vocab_file", help="Vocab for output decoding")
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
     parser.add_argument("--lm")
-
+    parser.add_argument("--beam", type=int, default=100, help="Beam size")
+    parser.add_argument("--alpha", type=float, default=0.01)
+    parser.add_argument("--beta", type=float, default=5.0)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -127,20 +129,23 @@ def evaluate():
     c_total = 0
     w_errors = 0
     w_total = 0
-
+    wlm_errors = 0
     for j, batch in enumerate(valid_itr):
         if j > args.valid_steps:
             break
 
         try:
-            step_metrics = run_step(index2vocab, model, batch, args.device, args.verbose, lm=lm, beam=3)
+            step_metrics = run_step(index2vocab, model, batch, args.device, args.verbose,
+                                    lm=lm, beam=args.beam, alpha=args.alpha, beta=args.beta)
             c_errors += step_metrics['c_errors']
             w_errors += step_metrics['w_errors']
-
+            wlm_errors += step_metrics['wlm_errors']
             c_total += step_metrics['c_total']
             w_total += step_metrics['w_total']
             metrics['cer'] = (c_errors / c_total) * 100
             metrics['wer'] = (w_errors / w_total) * 100
+            metrics['wlm'] = (wlm_errors / w_total) * 100
+
             if j % args.steps_per_update == 0:
                 logger.info(metrics)
         except Exception as e:
