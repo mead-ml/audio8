@@ -89,7 +89,7 @@ def evaluate():
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
     parser.add_argument("--lm")
     parser.add_argument("--beam", type=int, default=1, help="Beam size")
-    parser.add_argument("--alpha", type=float, default=0.4)
+    parser.add_argument("--alpha", type=float, default=0.7)
     parser.add_argument("--beta", type=float, default=5.0)
     args = parser.parse_args()
 
