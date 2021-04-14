@@ -99,6 +99,7 @@ def evaluate():
     vocab_list = read_vocab_file(vocab_file)
 
     beam_lm_key = None
+    ctc_decoder = None
     # Prefix beam search with optional LM
     if args.beam > 1 or args.lm:
         from ctcdecode import CTCBeamDecoder
