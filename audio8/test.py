@@ -11,8 +11,7 @@ from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Offsets, revlut
 from eight_mile.pytorch.layers import sequence_mask, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
-from ctc import ctc_metrics, prefix_beam_search, kenlm_model, decode_text_wer
-
+from ctc import ctc_metrics, decode_text_wer
 logger = logging.getLogger(__file__)
 
 Offsets.GO = 0
@@ -23,28 +22,40 @@ Offsets.VALUES[Offsets.EOS] = '</s>'
 Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 
-def run_step(index2vocab, model, batch, device, verbose=False, lm=None, beam=50, alpha=0.02, beta=5.0):
+def run_step(index2vocab, model, batch, device, verbose=False, ctc_decoder=None):
     with torch.no_grad():
         inputs, input_lengths, targets, target_lengths, _ = batch
         inputs = inputs.to(device)
         pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device)
         logits_batch, _ = model(inputs, pad_mask)
         metrics = ctc_metrics(logits_batch, targets, input_lengths, index2vocab)
-        input_lengths_batch = pad_mask.sum(-1)
-        metrics['wlm_errors'] = 0
+        metrics['wbeam_errors'] = 0
 
-        for logits, input_lengths, target in zip(logits_batch, input_lengths_batch, targets):
-            input_lengths = input_lengths.item()
-            probs = logits.exp().cpu().numpy()
-            transcription = prefix_beam_search(probs[:input_lengths, :], index2vocab, language_model=lm, beam=beam,
-                                               alpha=alpha, beta=beta)[0]
-            if verbose:
-                print(transcription)
-            werr, _ = decode_text_wer(transcription, target, index2vocab)
-            metrics['wlm_errors'] += werr
+        if ctc_decoder:
+            B = inputs.shape[0]
+            beam_results, beam_scores, timesteps, out_lens = ctc_decoder.decode(logits_batch)
+
+            for b in range(B):
+                transcription_ids = beam_results[b][0][:out_lens[b][0]]
+                transcription = ''.join([index2vocab[t.item()] for t in transcription_ids])
+                if verbose:
+                   print(transcription)
+
+                werr, _ = decode_text_wer(transcription, targets[b], index2vocab)
+                metrics['wbeam_errors'] += werr
 
     return metrics
 
+
+def read_vocab_list(vocab_file: str):
+    vocab = []
+    for v in Offsets.VALUES:
+        vocab.append(v)
+    with open(vocab_file) as rf:
+        for i, line in enumerate(rf):
+            v = line.split()[0]
+            vocab.append(v)
+        return vocab
 
 def evaluate():
     parser = ArgumentParser()
@@ -77,24 +88,32 @@ def evaluate():
     parser.add_argument("--vocab_file", help="Vocab for output decoding")
     parser.add_argument("--target_tokens_per_batch", type=int, default=700_000)
     parser.add_argument("--lm")
-    parser.add_argument("--beam", type=int, default=100, help="Beam size")
-    parser.add_argument("--alpha", type=float, default=0.01)
+    parser.add_argument("--beam", type=int, default=1, help="Beam size")
+    parser.add_argument("--alpha", type=float, default=0.4)
     parser.add_argument("--beta", type=float, default=5.0)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
 
-    lm = None
-    if args.lm is not None:
-        import kenlm
-
-        logger.info("Found LM file, loading...")
-
-        lm = kenlm.Model(args.lm)
-        lm = kenlm_model(lm)
-
     vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, args.dict_file)
-    vocab = read_vocab_file(vocab_file)
+    vocab_list = read_vocab_file(vocab_file)
+
+    beam_lm_key = None
+    # Prefix beam search with optional LM
+    if args.beam > 1 or args.lm:
+        from ctcdecode import CTCBeamDecoder
+        ctc_decoder = CTCBeamDecoder(
+            labels=vocab_list,
+            model_path=args.lm,
+            alpha=args.alpha,
+            beta=args.beta,
+            beam_width=args.beam,
+            blank_id=Offsets.GO,
+            log_probs_input=True,
+        )
+        beam_lm_key = f'werr_lm_{args.beam}' if args.lm else f'werr_{args.beam}'
+
+    vocab = {v: i for i, v in enumerate(vocab_list)}
     vec = TextVectorizer(vocab)
     index2vocab = revlut(vocab)
     valid_dataset = os.path.join(args.root_dir, args.valid_dataset)
@@ -108,6 +127,7 @@ def evaluate():
         target_sample_rate=args.target_sample_rate,
         distribute=False,
         shuffle=False,
+        is_infinite=False,
     )
     valid_loader = DataLoader(valid_set, batch_size=None)
     logger.info("Loaded datasets")
@@ -130,27 +150,32 @@ def evaluate():
     w_errors = 0
     w_total = 0
     wlm_errors = 0
+
+
     for j, batch in enumerate(valid_itr):
         if j > args.valid_steps:
             break
 
         try:
-            step_metrics = run_step(index2vocab, model, batch, args.device, args.verbose,
-                                    lm=lm, beam=args.beam, alpha=args.alpha, beta=args.beta)
+            step_metrics = run_step(index2vocab, model, batch, args.device, args.verbose, ctc_decoder)
+
             c_errors += step_metrics['c_errors']
             w_errors += step_metrics['w_errors']
-            wlm_errors += step_metrics['wlm_errors']
+            if 'wbeam_errors' in step_metrics:
+                wlm_errors += step_metrics['wbeam_errors']
             c_total += step_metrics['c_total']
             w_total += step_metrics['w_total']
             metrics['cer'] = (c_errors / c_total) * 100
             metrics['wer'] = (w_errors / w_total) * 100
-            metrics['wlm'] = (wlm_errors / w_total) * 100
-
-            if j % args.steps_per_update == 0:
+            if beam_lm_key:
+                metrics[beam_lm_key] = (wlm_errors / w_total) * 100
+            metrics['step'] = j + 1
+            if (j + 1) % args.steps_per_update == 0:
                 logger.info(metrics)
         except Exception as e:
             logger.error(e)
-
+    logger.info("Final results")
+    logger.info(metrics)
 
 if __name__ == "__main__":
     evaluate()

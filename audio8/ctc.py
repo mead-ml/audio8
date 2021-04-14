@@ -146,7 +146,6 @@ def postproc_bpe(sentence):
     return sentence
 
 
-
 def decode_text_wer(pred_units, t, index2vocab, postproc_fn=postproc_letters):
     import editdistance
     with torch.no_grad():
@@ -156,11 +155,12 @@ def decode_text_wer(pred_units, t, index2vocab, postproc_fn=postproc_letters):
         targ = t[p]
         targ_units = [index2vocab[x.item()] for x in targ]
         targ_words = postproc_fn(targ_units).split()
-        pred_words_raw = pred_units.split()
+        pred_words_raw = postproc_fn(pred_units).split()
         dist = editdistance.eval(pred_words_raw, targ_words)
         w_errs += dist
         w_len += len(targ_words)
     return w_errs, w_len
+
 
 def decode_metrics(decoded, target, input_lengths, index2vocab, postproc_fn=postproc_letters):
     metrics = {}
