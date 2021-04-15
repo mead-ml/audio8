@@ -8,14 +8,14 @@ import os
 import contextlib
 from argparse import ArgumentParser
 from audio8.data import AudioTextLetterDataset
-from audio8.text import TextVectorizer, read_vocab_file
+from audio8.text import TextVectorizer, read_vocab_list
 from audio8.wav2vec2 import create_acoustic_model, load_fairseq_bin
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Average, get_num_gpus_multiworker, Offsets, revlut
 from eight_mile.pytorch.layers import save_checkpoint, init_distributed, sequence_mask, find_latest_checkpoint
 from eight_mile.pytorch.optz import OptimizerManager
-from audio8.ctc import CTCLoss, ctc_metrics, prefix_beam_search, postproc_bpe, postproc_letters
+from audio8.ctc import CTCLoss, ctc_metrics, postproc_bpe, postproc_letters
 from audio8.utils import create_lrs
 
 logger = logging.getLogger(__file__)
@@ -27,7 +27,7 @@ Offsets.VALUES[Offsets.EOS] = '</s>'
 Offsets.VALUES[Offsets.UNK] = '<unk>'
 
 
-def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True, use_bpe=False):
+def run_step(index2vocab, model, batch, loss_function, device, training=True, use_bpe=False, ctc_decoder=None):
 
     inputs, input_lengths, targets, target_lengths, _ = batch
     pad_mask = sequence_mask(input_lengths, inputs.shape[1]).to(device=device)
@@ -42,21 +42,15 @@ def run_step(index2vocab, model, batch, loss_function, device, verbose, training
     metrics['batch_size'] = inputs.shape[0]
     metrics['num_tokens'] = num_tokens
     if not training:
-        decoder_eow = '|' if not use_bpe else ' '
-        delim = '' if not use_bpe else ' '
         postproc_fn = postproc_letters if not use_bpe else postproc_bpe
         logits = logits.detach().cpu()
         metrics.update(ctc_metrics(logits, targets, input_lengths, index2vocab, postproc_fn=postproc_fn))
-        if verbose:
-            input_lengths_batch = pad_mask.sum(-1)
-            logits_batch = logits
-            for logits, input_lengths in zip(logits_batch, input_lengths_batch):
-                input_lengths = input_lengths.item()
-                probs = logits.exp().cpu().numpy()
-                transcription = prefix_beam_search(
-                    probs[:input_lengths, :], index2vocab, beam=1, decoder_eow=decoder_eow, delim=delim,
-                )[0]
-                print(transcription)
+        # In verbose, we will run the first item from the batch through the decoder and print it
+        if ctc_decoder:
+            transcriptions = ctc_decoder.run(logits[0].unsqueeze(0), n_best=1)
+            transcription = ''.join(transcriptions[0])
+            print(transcription)
+
     return loss, metrics
 
 
@@ -124,7 +118,10 @@ def train():
         default=-1,
         help="Local rank for distributed training (-1 means use the environment variables to find)",
     )
-
+    parser.add_argument("--lm")
+    parser.add_argument("--beam", type=int, default=1, help="Beam size")
+    parser.add_argument("--alpha", type=float, default=0.7)
+    parser.add_argument("--beta", type=float, default=5.0)
     args = parser.parse_args()
 
     args.dict_file = args.dict_file.format(args.target_type)
@@ -150,7 +147,19 @@ def train():
         logger.info("Early stopping will be turned off")
 
     vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, args.dict_file)
-    vocab = read_vocab_file(vocab_file)
+    vocab_list = read_vocab_list(vocab_file)
+    ctc_decoder = None
+    if args.verbose:
+        from ctc import PrefixBeamSearch
+        ctc_decoder = PrefixBeamSearch(
+            vocab_list,
+            alpha=args.alpha,
+            beta=args.beta,
+            beam=args.beam,
+            lm_file=args.lm,
+        )
+    vocab = {v: i for i, v in enumerate(vocab_list)}
+
     vec = TextVectorizer(vocab)
     index2vocab = revlut(vocab)
     train_dataset = os.path.join(args.root_dir, args.train_dataset)
@@ -293,7 +302,7 @@ def train():
                 batch = next(train_itr)
 
                 loss, step_metrics = run_step(
-                    index2vocab, model, batch, loss_function, args.device, args.verbose, use_bpe=use_bpe
+                    index2vocab, model, batch, loss_function, args.device,
                 )
                 num_tokens_this_batch += step_metrics['num_tokens']
                 batch_size += step_metrics['batch_size']
@@ -359,7 +368,7 @@ def train():
                                         batch,
                                         loss_function,
                                         args.device,
-                                        verbose=args.verbose,
+                                        ctc_decoder=ctc_decoder,
                                         training=False,
                                         use_bpe=use_bpe,
                                     )

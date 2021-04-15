@@ -21,7 +21,7 @@ from eight_mile.pytorch.layers import (
     SequenceLoss,
 )
 from eight_mile.pytorch.optz import OptimizerManager
-from audio8.ctc import decode_metrics, prefix_beam_search, postproc_bpe, postproc_letters
+from audio8.ctc import decode_metrics, postproc_bpe, postproc_letters
 from audio8.utils import create_lrs
 import baseline.embeddings
 import baseline.pytorch.embeddings

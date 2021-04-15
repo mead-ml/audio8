@@ -5,7 +5,7 @@
 import os
 from argparse import ArgumentParser
 from audio8.data import AudioTextLetterDataset
-from audio8.text import TextVectorizer, read_vocab_file
+from audio8.text import TextVectorizer, read_vocab_list
 from audio8.wav2vec2 import create_acoustic_model, load_fairseq_bin
 from torch.utils.data import DataLoader
 from eight_mile.utils import str2bool, Offsets, revlut
@@ -33,11 +33,10 @@ def run_step(index2vocab, model, batch, device, verbose=False, ctc_decoder=None)
 
         if ctc_decoder:
             B = inputs.shape[0]
-            beam_results, beam_scores, timesteps, out_lens = ctc_decoder.decode(logits_batch)
+            transcriptions = ctc_decoder.run(logits_batch, n_best=1)
 
             for b in range(B):
-                transcription_ids = beam_results[b][0][:out_lens[b][0]]
-                transcription = ''.join([index2vocab[t.item()] for t in transcription_ids])
+                transcription = ''.join(transcriptions[b])
                 if verbose:
                    print(transcription)
 
@@ -46,16 +45,6 @@ def run_step(index2vocab, model, batch, device, verbose=False, ctc_decoder=None)
 
     return metrics
 
-
-def read_vocab_list(vocab_file: str):
-    vocab = []
-    for v in Offsets.VALUES:
-        vocab.append(v)
-    with open(vocab_file) as rf:
-        for i, line in enumerate(rf):
-            v = line.split()[0]
-            vocab.append(v)
-        return vocab
 
 def evaluate():
     parser = ArgumentParser()
@@ -96,21 +85,19 @@ def evaluate():
     logging.basicConfig(level=logging.INFO)
 
     vocab_file = args.vocab_file if args.vocab_file else os.path.join(args.root_dir, args.dict_file)
-    vocab_list = read_vocab_file(vocab_file)
+    vocab_list = read_vocab_list(vocab_file)
 
     beam_lm_key = None
     ctc_decoder = None
     # Prefix beam search with optional LM
     if args.beam > 1 or args.lm:
-        from ctcdecode import CTCBeamDecoder
-        ctc_decoder = CTCBeamDecoder(
-            labels=vocab_list,
-            model_path=args.lm,
+        from ctc import PrefixBeamSearch
+        ctc_decoder = PrefixBeamSearch(
+            vocab_list,
             alpha=args.alpha,
             beta=args.beta,
-            beam_width=args.beam,
-            blank_id=Offsets.GO,
-            log_probs_input=True,
+            beam=args.beam,
+            lm_file=args.lm,
         )
         beam_lm_key = f'werr_lm_{args.beam}' if args.lm else f'werr_{args.beam}'
 
@@ -152,7 +139,6 @@ def evaluate():
     w_total = 0
     wlm_errors = 0
 
-
     for j, batch in enumerate(valid_itr):
         if j > args.valid_steps:
             break
@@ -177,6 +163,7 @@ def evaluate():
             logger.error(e)
     logger.info("Final results")
     logger.info(metrics)
+
 
 if __name__ == "__main__":
     evaluate()
