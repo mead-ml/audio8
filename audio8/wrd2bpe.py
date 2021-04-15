@@ -13,6 +13,7 @@ parser.add_argument("--subword_vocab_file", type=str, help="The BPE subword voca
 parser.add_argument("--emit_begin_tok", type=str, default=[])
 parser.add_argument("--emit_end_tok", type=str, default=[])
 parser.add_argument("--lower", action='store_true')
+parser.add_argument("--split", type=str, default=" ")
 args = parser.parse_args()
 
 
@@ -38,6 +39,6 @@ for inf, outf in zip(input_files, output_files):
             line = line.strip()
             if args.lower:
                 line = line.lower()
-            tok = line.split()
+            tok = line.split(args.split)
             outline = ' '.join([i2w[x] for x in vec.run(tok)])
             wf.write(outline + '\n')
