@@ -12,10 +12,15 @@ class PrefixBeamSearch:
 
     def __init__(self, vocab_list, alpha=0.2, beta=5.0, beam: int=100, lm_file: Optional[str]=None):
         from ctcdecode import CTCBeamDecoder
-        self.vocab_list = vocab_list
+        self.vocab_list = [v for v in vocab_list]
+        self.use_bar = False
+        self.bar_off = self.vocab_list.index('|')
+        if self.bar_off >= 0:
+            self.use_bar = True
+            self.vocab_list[self.bar_off] = ' '
         self.beam = beam
         self.ctc_decoder = CTCBeamDecoder(
-                labels=vocab_list,
+                labels=self.vocab_list,
                 model_path=lm_file,
                 alpha=alpha,
                 beta=beta,
@@ -38,7 +43,7 @@ class PrefixBeamSearch:
         beam_results, beam_scores, timesteps, out_lens = self.ctc_decoder.decode(log_probs)
 
         def transform_ids(t):
-            return t if return_ids else self.vocab_list[t]
+            return t if return_ids else (self.vocab_list[t] if t != self.bar_off else '|')
 
         transcriptions = []
         if n_best == 1:
