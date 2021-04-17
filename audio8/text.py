@@ -19,7 +19,7 @@ import torch.nn as nn
 import contextlib
 
 
-def read_vocab_file(vocab_file: str):
+def read_vocab_list(vocab_file: str):
     vocab = []
     for v in Offsets.VALUES:
         vocab.append(v)
@@ -27,7 +27,12 @@ def read_vocab_file(vocab_file: str):
         for i, line in enumerate(rf):
             v = line.split()[0]
             vocab.append(v)
-        return {v: i for i, v in enumerate(vocab)}
+        return vocab
+
+
+def read_vocab_file(vocab_file: str):
+    vocab_list = read_vocab_list(vocab_file)
+    return {v: i for i, v in enumerate(vocab_list)}
 
 
 class TextVectorizer:

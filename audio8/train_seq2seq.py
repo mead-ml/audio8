@@ -21,7 +21,7 @@ from eight_mile.pytorch.layers import (
     SequenceLoss,
 )
 from eight_mile.pytorch.optz import OptimizerManager
-from audio8.ctc import ctc_metrics, prefix_beam_search, postproc_bpe, postproc_letters
+from audio8.ctc import decode_metrics, postproc_bpe, postproc_letters
 from audio8.utils import create_lrs
 import baseline.embeddings
 import baseline.pytorch.embeddings
@@ -86,50 +86,6 @@ def create_seq2seq_model(
         layer_drop=decoder_layer_drop,
     )
     return Seq2Seq(encoder, decoder)
-
-
-def decode_metrics(decoded, target, input_lengths, index2vocab, postproc_fn=postproc_letters):
-    metrics = {}
-    import editdistance
-
-    BLANK_IDX = Offsets.GO
-    with torch.no_grad():
-
-        c_err = 0
-        c_len = 0
-        w_errs = 0
-        w_len = 0
-        wv_errs = 0
-        for dp, t, inp_l in zip(decoded, target, input_lengths,):
-            dp = dp[:inp_l].unsqueeze(0)
-            p = (t != Offsets.PAD) & (t != Offsets.EOS)
-            targ = t[p]
-            targ_units = [index2vocab[x.item()] for x in targ]
-            targ_units_arr = targ.tolist()
-
-            toks = dp.unique_consecutive()
-            pred_units_arr = toks[toks != BLANK_IDX].tolist()
-
-            c_err += editdistance.eval(pred_units_arr, targ_units_arr)
-            c_len += len(targ_units_arr)
-
-            targ_words = postproc_fn(targ_units).split()
-
-            pred_units = [index2vocab[x] for x in pred_units_arr]
-            pred_words_raw = postproc_fn(pred_units).split()
-
-            dist = editdistance.eval(pred_words_raw, targ_words)
-            w_errs += dist
-            wv_errs += dist
-
-            w_len += len(targ_words)
-
-        metrics["wv_errors"] = wv_errs
-        metrics["w_errors"] = w_errs
-        metrics["w_total"] = w_len
-        metrics["c_errors"] = c_err
-        metrics["c_total"] = c_len
-    return metrics
 
 
 def run_step(index2vocab, model, batch, loss_function, device, verbose, training=True, use_bpe=False):
