@@ -71,7 +71,11 @@ def main():
         package_data={},
         include_package_data=False,
         install_requires=['numpy', 'six', 'soundfile', 'editdistance', 'mead-baseline',],
-        extras_require={'test': ['pytest', 'mock', 'contextdecorator', 'pytest-forked'], 'scipy': ['scipy']},
+        extras_require={
+            'test': ['pytest', 'mock', 'contextdecorator', 'pytest-forked'],
+            'scipy': ['scipy'],
+            'ctcdecode': ['ctcdecode'],
+        },
         entry_points={'console_scripts': []},
         classifiers={
             'Development Status :: 3 - Alpha',
