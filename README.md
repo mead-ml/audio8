@@ -1,5 +1,5 @@
 # audio8
-API examples using 8-mile for audio
+API examples using [8-mile](https://github.com/dpressel/mead-baseline) for audio
 
 ## Implementation
 
