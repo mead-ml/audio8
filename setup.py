@@ -70,7 +70,13 @@ def main():
         packages=find_packages(exclude=['tests', 'api-examples']),
         package_data={},
         include_package_data=False,
-        install_requires=['numpy', 'six', 'soundfile', 'editdistance', 'mead-baseline',],
+        install_requires=[
+            'numpy',
+            'six',
+            'soundfile',
+            'editdistance',
+            'mead-baseline',
+        ],
         extras_require={
             'test': ['pytest', 'mock', 'contextdecorator', 'pytest-forked'],
             'scipy': ['scipy'],

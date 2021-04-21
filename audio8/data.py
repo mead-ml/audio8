@@ -76,7 +76,10 @@ def _is_batch_full(num_sentences, num_tokens, max_tokens, max_sentences):
 
 
 def batch_by_size(
-    indices, sizes, max_tokens=None, max_sentences=128,
+    indices,
+    sizes,
+    max_tokens=None,
+    max_sentences=128,
 ):
     sample_len = 0
     sample_lens = []
@@ -183,14 +186,8 @@ class AudioTextLetterDataset(IterableDataset):
                     # If the data is already BPE, we dont want to re-tokenize it, we just have to convert it to ints
                     # the assumption here is that if its BPE, the start and token are not part of the chunks
                     else:
-                        go = (
-                            [self.vec.vocab[t] for t in self.vec.emit_begin_tok]
-                            if self.vec.emit_begin_tok
-                            else []
-                        )
-                        end = (
-                            [self.vec.vocab[t] for t in self.vec.emit_end_tok] if self.vec.emit_end_tok else []
-                        )
+                        go = [self.vec.vocab[t] for t in self.vec.emit_begin_tok] if self.vec.emit_begin_tok else []
+                        end = [self.vec.vocab[t] for t in self.vec.emit_end_tok] if self.vec.emit_end_tok else []
 
                         tokens = go + [self.get_or_unk_warn(t) for t in text] + end
                         tokens = np.array(tokens, dtype=np.int)
@@ -202,7 +199,12 @@ class AudioTextLetterDataset(IterableDataset):
         keys = np.arange(len(self.files)) if not self.shuffle else np.random.permutation(len(self.files))
         indices = np.lexsort((keys, self.sizes))[::-1]
 
-        self.batches = batch_by_size(indices, self.sizes, self.max_elems_per_batch, max_sentences=128,)
+        self.batches = batch_by_size(
+            indices,
+            self.sizes,
+            self.max_elems_per_batch,
+            max_sentences=128,
+        )
 
     def _get_worker_info(self):
         return torch.utils.data.get_worker_info() if self.distribute else None
@@ -344,7 +346,12 @@ class AudioFileDataset(IterableDataset):
                 if min_length is not None and sz < min_length:
                     skipped += 1
                     continue
-                self.files.append((os.path.join(self.directory, items[0]), sz,))
+                self.files.append(
+                    (
+                        os.path.join(self.directory, items[0]),
+                        sz,
+                    )
+                )
 
         sorted(self.files, key=lambda item: item[-1])
         logger.info(f"loaded {len(self.files)}, skipped {skipped} samples")

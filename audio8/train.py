@@ -151,6 +151,7 @@ def train():
     ctc_decoder = None
     if args.verbose:
         from ctc import PrefixBeamSearch
+
         ctc_decoder = PrefixBeamSearch(
             vocab_list,
             alpha=args.alpha,
@@ -302,14 +303,18 @@ def train():
                 batch = next(train_itr)
 
                 loss, step_metrics = run_step(
-                    index2vocab, model, batch, loss_function, args.device,
+                    index2vocab,
+                    model,
+                    batch,
+                    loss_function,
+                    args.device,
                 )
                 num_tokens_this_batch += step_metrics['num_tokens']
                 batch_size += step_metrics['batch_size']
 
                 avg_loss.update(loss.item())
                 loss.backward()
-                if is_dist_step: 
+                if is_dist_step:
                     # This will allreduce the gradients which will be scaled by 1/num_gpus
                     if args.distributed:
                         torch.distributed.all_reduce(batch_size)
@@ -340,9 +345,7 @@ def train():
                                 batch_size_toks.avg * steps_per_sec * 60,
                             )
 
-                    if (
-                        optimizer.global_step % validate_on == 0 and args.local_rank < 1
-                    ):
+                    if optimizer.global_step % validate_on == 0 and args.local_rank < 1:
                         train_token_loss = avg_loss.avg
                         metrics['average_train_loss'] = train_token_loss
                         avg_valid_loss = Average('average_valid_loss')

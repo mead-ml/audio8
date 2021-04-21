@@ -12,6 +12,7 @@ from eight_mile.utils import str2bool, Offsets, revlut
 from eight_mile.pytorch.layers import sequence_mask, find_latest_checkpoint
 from eight_mile.pytorch.optz import *
 from ctc import ctc_metrics, decode_text_wer
+
 logger = logging.getLogger(__file__)
 
 Offsets.GO = 0
@@ -38,7 +39,7 @@ def run_step(index2vocab, model, batch, device, verbose=False, ctc_decoder=None)
             for b in range(B):
                 transcription = ''.join(transcriptions[b])
                 if verbose:
-                   print(transcription)
+                    print(transcription)
 
                 werr, _ = decode_text_wer(transcription, targets[b], index2vocab)
                 metrics['wbeam_errors'] += werr
@@ -92,6 +93,7 @@ def evaluate():
     # Prefix beam search with optional LM
     if args.beam > 1 or args.lm:
         from ctc import PrefixBeamSearch
+
         ctc_decoder = PrefixBeamSearch(
             vocab_list,
             alpha=args.alpha,

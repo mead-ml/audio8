@@ -9,9 +9,9 @@ from collections import defaultdict, Counter
 
 
 class PrefixBeamSearch:
-
-    def __init__(self, vocab_list, alpha=0.2, beta=5.0, beam: int=100, lm_file: Optional[str]=None):
+    def __init__(self, vocab_list, alpha=0.2, beta=5.0, beam: int = 100, lm_file: Optional[str] = None):
         from ctcdecode import CTCBeamDecoder
+
         self.vocab_list = [v for v in vocab_list]
         self.use_bar = False
         self.bar_off = self.vocab_list.index('|')
@@ -20,14 +20,14 @@ class PrefixBeamSearch:
             self.vocab_list[self.bar_off] = ' '
         self.beam = beam
         self.ctc_decoder = CTCBeamDecoder(
-                labels=self.vocab_list,
-                model_path=lm_file,
-                alpha=alpha,
-                beta=beta,
-                beam_width=beam,
-                blank_id=Offsets.GO,
-                log_probs_input=True,
-            )
+            labels=self.vocab_list,
+            model_path=lm_file,
+            alpha=alpha,
+            beta=beta,
+            beam_width=beam,
+            blank_id=Offsets.GO,
+            log_probs_input=True,
+        )
 
     def run(self, log_probs: np.ndarray, n_best=None, return_ids=False):
         """Return n_best results from prefix beam decode.  If the n_best=1, then we will collapse the singleton dim
@@ -48,13 +48,13 @@ class PrefixBeamSearch:
         transcriptions = []
         if n_best == 1:
             for b in range(B):
-                transcription = [transform_ids(t) for t in beam_results[b][0][:out_lens[b][0]]]
+                transcription = [transform_ids(t) for t in beam_results[b][0][: out_lens[b][0]]]
                 transcriptions.append(transcription)
         else:
             for b in range(B):
                 n_bests = []
                 for n in range(n_best):
-                    n_best = [transform_ids(t) for t in beam_results[b][n][:out_lens[b][n]]]
+                    n_best = [transform_ids(t) for t in beam_results[b][n][: out_lens[b][n]]]
                     n_bests.append(n_best)
                 transcriptions.append(n_bests)
         return transcriptions
@@ -74,6 +74,7 @@ def postproc_bpe(sentence):
 
 def decode_text_wer(pred_units, t, index2vocab, postproc_fn=postproc_letters):
     import editdistance
+
     with torch.no_grad():
         w_errs = 0
         w_len = 0
@@ -100,7 +101,11 @@ def decode_metrics(decoded, target, input_lengths, index2vocab, postproc_fn=post
         w_errs = 0
         w_len = 0
         wv_errs = 0
-        for dp, t, inp_l in zip(decoded, target, input_lengths,):
+        for dp, t, inp_l in zip(
+            decoded,
+            target,
+            input_lengths,
+        ):
             dp = dp[:inp_l].unsqueeze(0)
             p = (t != Offsets.PAD) & (t != Offsets.EOS)
             targ = t[p]
@@ -143,7 +148,11 @@ def ctc_metrics(lprobs_t, target, input_lengths, index2vocab, postproc_fn=postpr
         w_errs = 0
         w_len = 0
         wv_errs = 0
-        for lp, t, inp_l in zip(lprobs_t, target, input_lengths,):
+        for lp, t, inp_l in zip(
+            lprobs_t,
+            target,
+            input_lengths,
+        ):
             lp = lp[:inp_l].unsqueeze(0)
             p = (t != Offsets.PAD) & (t != Offsets.EOS)
             targ = t[p]

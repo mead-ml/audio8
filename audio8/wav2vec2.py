@@ -397,12 +397,20 @@ def create_loss(n_vars, n_negatives):
 
 class ConvFeatureExtractionModel(nn.Module):
     def __init__(
-        self, conv_layers: List[Tuple[int, int, int]], dropout: float = 0.0, conv_bias: bool = False,
+        self,
+        conv_layers: List[Tuple[int, int, int]],
+        dropout: float = 0.0,
+        conv_bias: bool = False,
     ):
         super().__init__()
 
         def block(
-            n_in, n_out, k, stride, is_group_norm=False, conv_bias=False,
+            n_in,
+            n_out,
+            k,
+            stride,
+            is_group_norm=False,
+            conv_bias=False,
         ):
 
             if is_group_norm:
@@ -424,7 +432,16 @@ class ConvFeatureExtractionModel(nn.Module):
         for i, cl in enumerate(conv_layers):
             (dim, k, stride) = cl
 
-            self.conv_layers.append(block(in_d, dim, k, stride, is_group_norm=i == 0, conv_bias=conv_bias,))
+            self.conv_layers.append(
+                block(
+                    in_d,
+                    dim,
+                    k,
+                    stride,
+                    is_group_norm=i == 0,
+                    conv_bias=conv_bias,
+                )
+            )
             in_d = dim
 
     def forward(self, x):

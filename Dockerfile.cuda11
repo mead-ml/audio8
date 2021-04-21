@@ -1,0 +1,15 @@
+ARG MEAD=mead2-pytorch-cuda11
+ARG VERSION=latest
+
+FROM meadml/${MEAD}:${VERSION}
+
+WORKDIR /usr/audio8
+
+COPY . /usr/audio8
+RUN apt-get update && apt-get install -y libasound2-dev libsndfile-dev git 
+RUN python3.8 -m pip install soundfile
+RUN python3.8 -m pip install editdistance
+RUN python3.8 -m pip install scipy
+
+RUN git clone --recursive https://github.com/parlance/ctcdecode.git
+RUN cd ctcdecode && python3.8 -m pip install .

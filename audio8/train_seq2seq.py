@@ -73,7 +73,11 @@ def create_seq2seq_model(
         freeze_fx=freeze_fx,
     )
     preproc_data = baseline.embeddings.load_embeddings(
-        'x', dsz=d_model, known_vocab=vocab, preserve_vocab_indices=True, embed_type='learned-positional',
+        'x',
+        dsz=d_model,
+        known_vocab=vocab,
+        preserve_vocab_indices=True,
+        embed_type='learned-positional',
     )
     tgt_embeddings = preproc_data['embeddings']
     decoder = TextTransformerDecoder(
@@ -356,10 +360,14 @@ def train():
             metrics = {}
             iters += 1
             is_dist_step = iters % args.grad_accum == 0
-            with model.no_sync() if (args.distributed and not is_dist_step) else contextlib.ExitStack():        # This loader will iterate for ever
+            with model.no_sync() if (
+                args.distributed and not is_dist_step
+            ) else contextlib.ExitStack():  # This loader will iterate for ever
                 batch = next(train_itr)
 
-                loss, step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose, use_bpe=use_bpe)
+                loss, step_metrics = run_step(
+                    index2vocab, model, batch, loss_function, args.device, args.verbose, use_bpe=use_bpe
+                )
 
                 num_tokens_this_batch += step_metrics['num_tokens']
                 batch_size += step_metrics['batch_size']
@@ -422,7 +430,16 @@ def train():
 
                     try:
                         with torch.no_grad():
-                            loss, valid_step_metrics = run_step(index2vocab, model, batch, loss_function, args.device, args.verbose, training=False, use_bpe=use_bpe)
+                            loss, valid_step_metrics = run_step(
+                                index2vocab,
+                                model,
+                                batch,
+                                loss_function,
+                                args.device,
+                                args.verbose,
+                                training=False,
+                                use_bpe=use_bpe,
+                            )
                         c_errors += valid_step_metrics['c_errors']
                         w_errors += valid_step_metrics['w_errors']
                         c_total += valid_step_metrics['c_total']
