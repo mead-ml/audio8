@@ -261,7 +261,7 @@ class AudioTextLetterDataset(IterableDataset):
                 ]
 
     def read_batch(self, batch):
-        zp_text = np.ones((len(batch), self.max_dst_length), dtype=np.long)
+        zp_text = np.full((len(batch), self.max_dst_length), Offsets.PAD, dtype=np.long)
         audios = []
         audio_lengths = np.zeros(len(batch), dtype=np.int32)
         text_lengths = np.zeros(len(batch), dtype=np.long)
