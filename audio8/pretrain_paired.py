@@ -271,7 +271,6 @@ def train():
     else:
         _model = model
     model_base = os.path.join(args.basedir, 'checkpoint')
-    steps = global_step
 
     train_itr = iter(train_loader)
     avg_loss = Average('average_train_loss')
@@ -340,7 +339,7 @@ def train():
                             )
 
                     if optimizer.global_step % update_on == 0 and args.local_rank < 1:
-                        save_checkpoint(model, model_base, steps, tick_type='step')
+                        save_checkpoint(model, model_base, optimizer.global_step, tick_type='step')
                     if optimizer.global_step % validate_on == 0 and args.local_rank < 1:
                         train_token_loss = avg_loss.avg
                         metrics['average_train_loss'] = train_token_loss
