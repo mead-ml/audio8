@@ -9,6 +9,7 @@ from eight_mile.pytorch.serialize import load_tlm_npz
 from eight_mile.pytorch.layers import (
     pytorch_conv1d,
     pytorch_linear,
+    PassThru,
     Conv1DSame,
     TransformerEncoderStack,
     Dense,
@@ -787,6 +788,7 @@ class Wav2Vec2PooledEncoder(nn.Module):
         layer_drop=0.0,
         reduction_type='SHA',
         reduction_d_k=64,
+        final_output_dim=None,
     ):
         super().__init__()
         self.encoder = Wav2Vec2Encoder(
@@ -804,30 +806,37 @@ class Wav2Vec2PooledEncoder(nn.Module):
             channel_mask_len,
             layer_drop,
         )
-        self.output_dim = self.encoder.output_dim
+
+        if final_output_dim:
+            self.output_dim = final_output_dim
+            self.proj_layer = pytorch_linear(self.encoder.output_dim, final_output_dim)
+        else:
+            self.output_dim = self.encoder.output_dim
+            self.proj_layer = PassThru()
+
         reduction_type = reduction_type.lower()
         if reduction_type == "2ha":
             self.reduction_layer = nn.Sequential(
-                TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k), nn.Linear(2 * d_model, d_model)
+                TwoHeadConcat(self.output_dim, dropout, scale=False, d_k=reduction_d_k), nn.Linear(2 * self.output_dim, self.output_dim)
             )
         elif reduction_type == "2ha_max":
             self.reduction_layer = nn.Sequential(
-                TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='max'),
-                nn.Linear(2 * d_model, d_model),
+                TwoHeadConcat(self.output_dim, dropout, scale=False, d_k=reduction_d_k, pooling='max'),
+                nn.Linear(2 * self.output_dim, self.output_dim),
             )
         elif reduction_type == "2ha_mean":
             self.reduction_layer = nn.Sequential(
-                TwoHeadConcat(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='mean'),
-                nn.Linear(2 * d_model, d_model),
+                TwoHeadConcat(self.output_dim, dropout, scale=False, d_k=reduction_d_k, pooling='mean'),
+                nn.Linear(2 * self.output_dim, self.output_dim),
             )
         elif reduction_type == "sha":
-            self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k)
+            self.reduction_layer = SingleHeadReduction(self.output_dim, dropout, scale=False, d_k=reduction_d_k)
         elif reduction_type == "sha_max":
-            self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='max')
+            self.reduction_layer = SingleHeadReduction(self.output_dim, dropout, scale=False, d_k=reduction_d_k, pooling='max')
         elif reduction_type == "sha_mean":
-            self.reduction_layer = SingleHeadReduction(d_model, dropout, scale=False, d_k=reduction_d_k, pooling='mean')
+            self.reduction_layer = SingleHeadReduction(self.output_dim, dropout, scale=False, d_k=reduction_d_k, pooling='mean')
         elif reduction_type == 'max':
-            self.reduction_layer = MaxPool1D(d_model)
+            self.reduction_layer = MaxPool1D(self.output_dim)
         else:
             raise Exception("Unknown exception type")
         self.freeze = True
@@ -837,7 +846,7 @@ class Wav2Vec2PooledEncoder(nn.Module):
         (x, pad_mask) = x
         with torch.no_grad() if self.freeze else contextlib.ExitStack():
             encoded, pad_mask = self.encoder(x, pad_mask)
-
+        encoded = self.proj_layer(encoded)
         if isinstance(self.reduction_layer, MaxPool1D):
             lengths = pad_mask.sum(-1)
             encoded_query = self.reduction_layer((encoded, lengths))
