@@ -812,7 +812,7 @@ class Wav2Vec2PooledEncoder(nn.Module):
             self.proj_layer = pytorch_linear(self.encoder.output_dim, final_output_dim)
         else:
             self.output_dim = self.encoder.output_dim
-            self.proj_layer = PassThru()
+            self.proj_layer = PassThru(self.output_dim)
 
         reduction_type = reduction_type.lower()
         self.reduction_fn = self._reduction_3
