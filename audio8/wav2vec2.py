@@ -857,7 +857,7 @@ class Wav2Vec2PooledEncoder(nn.Module):
 
     def _no_reduction_mask(self, encoded, pad_mask):
         """Do no reduction and return the tensor and the pad vector"""
-        return (encoded, pad_mask,)
+        return (encoded, pad_mask.unsqueeze(1).unsqueeze(1),)
     
     def forward(self, x):
 
