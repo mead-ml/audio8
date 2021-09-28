@@ -864,7 +864,7 @@ class Wav2Vec2PooledEncoder(nn.Module):
         (x, pad_mask) = x
         with torch.no_grad() if self.freeze else contextlib.ExitStack():
             encoded, pad_mask = self.encoder(x, pad_mask)
-        return self.reduction_fn(encoded, lengths)
+        return self.reduction_fn(encoded, pad_mask)
 
 
 class Wav2Vec2Model(nn.Module):
