@@ -6,6 +6,8 @@ FROM meadml/${MEAD}:${VERSION}
 COPY . /usr/mead/audio8
 WORKDIR /usr/mead
 
+RUN cd audio8 && pip install .
+
 RUN apt-get update && apt-get install -y libasound2-dev libsndfile-dev git
 RUN python3.6 -m pip install soundfile
 RUN python3.6 -m pip install editdistance
