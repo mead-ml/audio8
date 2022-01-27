@@ -30,4 +30,10 @@ jobs:
               file: docker/Dockerfile.cuda11
               push: true
               tags: meadml/audio8-cuda11:latest
+        - name: Build & Push PyTorch CUDA 11.1 image
+          uses: docker/build-push-action@v2
+          with:
+              file: docker/Dockerfile.cuda111
+              push: true
+              tags: meadml/audio8-cuda111:latest
 

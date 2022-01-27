@@ -298,7 +298,7 @@ def create_acoustic_model(
 
 def create_paired_model(
     embeddings,
-    target_sample_rate=16,
+    target_sample_rate=16000,
     audio_d_model=768,
     audio_num_heads=12,
     audio_num_layers=12,
