@@ -168,12 +168,12 @@ class TextTransformerPooledEncoder(nn.Module):
         with torch.no_grad() if self.freeze else contextlib.ExitStack():
             embedded = self.embeddings({'x': query})
             encoded = self.transformer((embedded, att_mask.unsqueeze(1).unsqueeze(1)))
-
         if isinstance(self.reduction_layer, MaxPool1D) or isinstance(self.reduction_layer, MeanPool1D):
             lengths = att_mask.sum(-1)
             encoded_reduced = self.reduction_layer((encoded, lengths))
         else:
             encoded_reduced = self.reduction_layer((encoded, encoded, encoded, att_mask.unsqueeze(1).unsqueeze(1)))
+
         return encoded_reduced
 
 
